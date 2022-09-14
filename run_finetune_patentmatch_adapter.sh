@@ -1,8 +1,8 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT license.
 
-batch=8
-accu=2
+batch=2
+accu=1
 lr=1e-5
 GPU='0'
 CUDA_VISIBLE_DEVICES=$GPU python examples/run_finetune_patentmatch_adapter.py \
@@ -10,7 +10,7 @@ CUDA_VISIBLE_DEVICES=$GPU python examples/run_finetune_patentmatch_adapter.py \
 --model_name_or_path roberta-large \
 --do_train \
 --do_eval \
---data_dir data/patent-match \
+--data_dir data/patent-match/ultra-balanced \
 --preprocess_type read_examples_origin \
 --output_dir ./proc_data/roberta_patentmatch \
 --max_seq_length 512 \
@@ -23,7 +23,7 @@ CUDA_VISIBLE_DEVICES=$GPU python examples/run_finetune_patentmatch_adapter.py \
 --adam_epsilon 1e-6 \
 --weight_decay 0 \
 --train_steps 20000 \
---save_steps 2000
+--save_steps 2000 \
 --report_steps 20000000000 \
 --freeze_bert="" \
 --freeze_adapter="True" \

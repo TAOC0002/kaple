@@ -46,12 +46,12 @@ class Example(object):
     """A single training/test example for the SWAG dataset."""
     def __init__(self,
                  index,
-                 text,
-                 text_b,
+                 prior,
+                 claim,
                  label=None):
-        self.idx = index
-        self.prior = text
-        self.claim = text_b
+        self.index = index
+        self.prior = prior
+        self.claim = claim
         self.label = label
 
     def __str__(self):
@@ -59,7 +59,7 @@ class Example(object):
 
     def __repr__(self):
         l = [
-            "id: {}".format(self.idx),
+            "id: {}".format(self.index),
             "prior: {}".format(self.prior),
             "claim: {}".format(self.claim),
         ]
@@ -86,19 +86,17 @@ class InputFeatures(object):
 
 
 def read_examples_origin(input_file, is_training):
-    cont = 0
     examples = []
     with open(input_file) as f:
-        for line in f:
-            line = json.loads(line.strip())
-            
+        data = json.load(f)
+        for line in data:           
             index = line['index']
             prior = line['text']
             claim = line['text_b']
 
             examples.append(
                 Example(
-                    idx=index,
+                    index=index,
                     prior=prior,
                     claim=claim,
                     label=line['label'] if is_training else None
@@ -158,10 +156,10 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
         assert len(input_mask) == max_seq_length
         assert len(segment_ids) == max_seq_length
 
-        label = int(example.label) if example.label else None
-        if example_index < 1 and is_training:
+        label = int(example.label) if example.label is not None else None
+        if example_index < 0 and is_training:
             logger.info("*** Example ***")
-            logger.info("idx: {}".format(example.idx))
+            logger.info("index: {}".format(example.index))
             logger.info("tokens:{}".format(' '.join(tokens)))
             logger.info("input_ids: {}".format(' '.join(map(str, input_ids))))
             logger.info("input_mask: {}".format(' '.join(map(str, input_mask))))
@@ -170,7 +168,7 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
 
         features.append(
             InputFeatures(
-                example_id=example.idx,
+                example_id=example.index,
                 input_ids=input_ids,
                 input_mask=input_mask,
                 segment_ids=segment_ids,

@@ -17,8 +17,8 @@ curPath = os.path.abspath(os.path.dirname(__file__))
 rootPath = os.path.split(curPath)[0]
 sys.path.append(rootPath)
 
-from pytorch_transformers import (RobertaTokenizer,
-                                  RobertaModel)
+from pytorch_transformers import (BertTokenizer,
+                                  BertModel)
 from pytorch_transformers import AdamW, WarmupLinearSchedule
 
 from torch.utils.data import DataLoader, Dataset, RandomSampler, SequentialSampler, TensorDataset, ConcatDataset
@@ -144,6 +144,12 @@ def train(args, train_dataset, val_dataset, model, tokenizer):
 
     set_seed(args)  # Added here for reproductibility (even between python 2 and 3)
 
+    best_eval_micro_F1 = 0
+    best_step = 0
+    best_checkpoint_dir = os.path.join(args.output_dir, 'best-checkpoint')
+    if not os.path.exists(best_checkpoint_dir):
+        os.makedirs(best_checkpoint_dir)
+
     for epoch in range(start_epoch, int(args.num_train_epochs)):
         for step, batch in enumerate(train_dataloader):
             start = time.time()
@@ -227,6 +233,19 @@ def train(args, train_dataset, val_dataset, model, tokenizer):
                     results = evaluate(args, val_dataset, model, tokenizer)
                     for key, value in results.items():
                         tb_writer.add_scalar('eval_{}'.format(key), value, global_step)
+                    if results['micro_F1'] > best_eval_micro_F1:
+                        logger.info("Saving best model checkpoint and optimizer to %s", best_checkpoint_dir)
+                        best_eval_micro_F1 = results['micro_F1'] 
+                        best_step = global_step                  
+                        model_to_save = adapter_model.module if hasattr(adapter_model,
+                                                                'module') else adapter_model  # Take care of distributed/parallel training
+                        
+                        model_to_save.save_pretrained(best_checkpoint_dir)  # save to pytorch_model.bin  model.state_dict()
+                        torch.save(optimizer.state_dict(), os.path.join(best_checkpoint_dir, 'optimizer.bin'))
+                        torch.save(scheduler.state_dict(), os.path.join(best_checkpoint_dir, 'scheduler.bin'))
+                        torch.save(args, os.path.join(best_checkpoint_dir, 'training_args.bin'))
+                    logger.info("Best eval_micro_F1 at step {}: {:.4f}".format(best_step, best_eval_micro_F1))
+                        
             if args.max_steps > 0 and global_step > args.max_steps:
                 break
         if args.max_steps > 0 and global_step > args.max_steps:
@@ -363,7 +382,7 @@ class Adapter(nn.Module):
 class PretrainedModel(nn.Module):
     def __init__(self):
         super(PretrainedModel, self).__init__()
-        self.model = RobertaModel.from_pretrained("roberta-large", output_hidden_states=True)
+        self.model = BertModel.from_pretrained("bert-base-uncased", output_hidden_states=True)
         self.config = self.model.config
         for p in self.parameters():
             p.requires_grad = False
@@ -680,7 +699,7 @@ def main():
     if args.local_rank not in [-1, 0]:
         torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
 
-    tokenizer = RobertaTokenizer.from_pretrained('roberta-large')
+    tokenizer = BertTokenizer.from_pretrained(args.model_name_or_path)
     pretrained_model = PretrainedModel()
     adapter_model = AdapterModel(args, pretrained_model.config, num_labels)
 

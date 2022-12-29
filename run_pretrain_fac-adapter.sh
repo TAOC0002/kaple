@@ -5,10 +5,10 @@
 task=trex
 GPU='0'
 CUDA_VISIBLE_DEVICES=$GPU python fac-adapter.py  \
-        --model_type bert \
-        --model_name_or_path=bert-base-uncased \
+        --model_type roberta \
+        --model_name_or_path=roberta-large \
         --data_dir=./data/trex-rc  \
-        --output_dir trex_output \
+        --output_dir trex_output_roberta \
         --restore '' \
         --do_train  \
         --do_eval   \
@@ -23,9 +23,9 @@ CUDA_VISIBLE_DEVICES=$GPU python fac-adapter.py  \
         --learning_rate 5e-5 \
         --warmup_steps=1200 \
         --save_steps 20000 \
-        --eval_steps 5000
+        --eval_steps 5000 \
         --adapter_size 768 \
-        --adapter_list "0,8,11" \
+        --adapter_list "0,11,22" \
         --adapter_skip_layers 0 \
         --adapter_transformer_layers 2 \
         --meta_adapter_model=""

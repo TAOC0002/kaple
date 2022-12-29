@@ -9,7 +9,7 @@ import random
 import torch.nn as nn
 import json
 import numpy as np
-from torch.nn import CrossEntropyLoss, MSELoss
+from torch.nn import CrossEntropyLoss, MSELoss, MultiheadAttention
 import sys, os
 import shutil
 
@@ -17,8 +17,8 @@ curPath = os.path.abspath(os.path.dirname(__file__))
 rootPath = os.path.split(curPath)[0]
 sys.path.append(rootPath)
 
-from pytorch_transformers import (BertTokenizer,
-                                  BertModel)
+from pytorch_transformers import (RobertaTokenizer,
+                                  RobertaModel)
 from pytorch_transformers import AdamW, WarmupLinearSchedule
 
 from torch.utils.data import DataLoader, Dataset, RandomSampler, SequentialSampler, TensorDataset, ConcatDataset
@@ -382,7 +382,7 @@ class Adapter(nn.Module):
 class PretrainedModel(nn.Module):
     def __init__(self):
         super(PretrainedModel, self).__init__()
-        self.model = BertModel.from_pretrained("bert-base-uncased", output_hidden_states=True)
+        self.model = RobertaModel.from_pretrained("roberta-large", output_hidden_states=True)
         self.config = self.model.config
         for p in self.parameters():
             p.requires_grad = False
@@ -435,8 +435,8 @@ class AdapterModel(nn.Module):
         # self.adapter = Adapter(args, AdapterConfig)
 
         self.adapter = nn.ModuleList([Adapter(args, AdapterConfig) for _ in range(self.adapter_num)])
-
-        self.com_dense = nn.Linear(self.config.hidden_size * 2, self.config.hidden_size)
+        self.attention = nn.ModuleList([MultiheadAttention(embed_dim=self.config.hidden_size, num_heads=self.config.num_attention_heads) for _ in range(self.adapter_num)])
+        # self.com_dense = nn.Linear(self.config.hidden_size * 2, self.config.hidden_size)
         self.dense = nn.Linear(self.config.hidden_size * 2, self.config.hidden_size)
         self.dropout = nn.Dropout(self.config.hidden_dropout_prob)
         self.out_proj = nn.Linear(self.config.hidden_size, self.num_labels)
@@ -454,7 +454,12 @@ class AdapterModel(nn.Module):
         adapter_hidden_states = []
         adapter_hidden_states_count = 0
         for i, adapter_module in enumerate(self.adapter):
-            fusion_state = hidden_states[self.adapter_list[i]] + hidden_states_last
+            if i == 0:
+                fusion_state = hidden_states[self.adapter_list[i]]
+            else:
+                fusion_state = self.attention[i](hidden_states[self.adapter_list[i]], hidden_states_last, hidden_states_last)[0]
+
+            # fusion_state = hidden_states[self.adapter_list[i]] + hidden_states_last
             hidden_states_last = adapter_module(fusion_state)
             adapter_hidden_states.append(hidden_states_last)
             adapter_hidden_states_count += 1
@@ -463,7 +468,8 @@ class AdapterModel(nn.Module):
                     hidden_states_last = hidden_states_last + adapter_hidden_states[int(adapter_hidden_states_count/self.adapter_skip_layers)]
 
         ##### drop below parameters when doing downstream tasks
-        com_features = self.com_dense(torch.cat([sequence_output, hidden_states_last],dim=2))
+        # com_features = self.com_dense(torch.cat([sequence_output, hidden_states_last],dim=2))
+        com_features = self.attention[0](sequence_output, hidden_states_last, hidden_states_last)[0]
 
         subj_special_start_id = subj_special_start_id.unsqueeze(1)
         subj_output = torch.bmm(subj_special_start_id, com_features)
@@ -699,7 +705,7 @@ def main():
     if args.local_rank not in [-1, 0]:
         torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
 
-    tokenizer = BertTokenizer.from_pretrained(args.model_name_or_path)
+    tokenizer = RobertaTokenizer.from_pretrained(args.model_name_or_path)
     pretrained_model = PretrainedModel()
     adapter_model = AdapterModel(args, pretrained_model.config, num_labels)
 

@@ -1,11 +1,11 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT license.
 
-batch=2
-accu=1
-lr=1e-5
+batch=8
+accu=2
+lr=5e-6
 GPU='0'
-CUDA_VISIBLE_DEVICES=$GPU python examples/run_finetune_patentmatch_adapter.py \
+CUDA_VISIBLE_DEVICES=$GPU python examples/run_finetune_patentmatch_cross_encoder.py \
 --model_type roberta-large \
 --model_name_or_path roberta-large \
 --do_train \
@@ -22,7 +22,6 @@ CUDA_VISIBLE_DEVICES=$GPU python examples/run_finetune_patentmatch_adapter.py \
 --learning_rate $lr \
 --adam_epsilon 1e-6 \
 --weight_decay 0 \
---train_steps 20000 \
 --save_steps 2000 \
 --report_steps 20000000000 \
 --freeze_bert="" \
@@ -31,5 +30,7 @@ CUDA_VISIBLE_DEVICES=$GPU python examples/run_finetune_patentmatch_adapter.py \
 --adapter_list "0,11,22" \
 --adapter_skip_layers 0 \
 --meta_fac_adaptermodel="./pretrained_models/fac-adapter/pytorch_model.bin" \
---meta_lin_adaptermodel=""
-
+--meta_lin_adaptermodel="./pretrained_models/lin-adapter/pytorch_model.bin" \
+--fusion_mode='attention' \
+--num_train_epochs 6 \
+# --meta_bertmodel="./proc_data/roberta_patentmatch/patentmatch_batch-8_lr-5e-06_warmup-0_epoch-6.0_concat/pytorch_bertmodel_4400_0.5436605821410952.bin"

@@ -97,7 +97,9 @@ def collate_examples():
             index += 1
 
     examples = pd.DataFrame(data=examples)
+    examples = examples.iloc[-80000:,:]
     examples = shuffle(examples)
+    # print(examples.shape)
 
     valid_file = open("valid.jsonl", "w")
     train_file = open("train.jsonl", "w")
@@ -125,8 +127,15 @@ def check_json_format(input_file):
             break
 
 
+def eda():
+    data = pd.read_json('valid.jsonl', orient='records')
+    print(data.columns)
+    print(data.shape)
+    print(sum(data['label']))
+
+
 if __name__ == "__main__":
     # make_full_section_corpus()
     # collate_examples()
-    check_json_format('valid.jsonl')
-
+    # check_json_format('valid.jsonl')
+    eda()

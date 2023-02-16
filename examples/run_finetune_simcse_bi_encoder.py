@@ -4,11 +4,11 @@ import argparse
 import logging
 import os
 import random
-
 import numpy as np
 import torch
 import torch.nn as nn
 from torch.nn import BCELoss, Sigmoid, MultiheadAttention
+from torch.nn.functional import cosine_similarity
 from sklearn.metrics import auc as _auc, roc_curve, average_precision_score
 
 from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
@@ -21,9 +21,9 @@ import sys
 curPath = os.path.abspath(os.path.dirname(__file__))
 rootPath = os.path.split(curPath)[0]
 sys.path.append(rootPath)
-
+from torch.autograd import Variable
 from pytorch_transformers.my_modeling_roberta import RobertaConfig, RoBERTaForMultipleChoice
-from pytorch_transformers import AdamW, WarmupLinearSchedule,RobertaModel
+from pytorch_transformers import AdamW, WarmupLinearSchedule, RobertaModel
 
 from pytorch_transformers.tokenization_roberta import RobertaTokenizer
 from transformers import AutoModel, AutoTokenizer
@@ -120,99 +120,125 @@ def read_examples_origin(input_file, is_training):
     return examples
 
 
+def tokens_to_ids(tokenizer, tokens, max_seq_length):
+    # segment_ids = [0] * (len(prior) + 1) + [1] * (len(claim) + 1) + [2]
+    # segment_ids = [0] * (len(context_tokens_choice) + 1) + [0] * (len(ending_tokens) + 1) + [0]
+    segment_ids = [0] * len(tokens)
+    input_ids = tokenizer.convert_tokens_to_ids(tokens)
+    input_mask = [1] * len(input_ids)
+    padding_length = max_seq_length - len(input_ids)
+    input_ids =  input_ids + ([0] * padding_length)
+    input_mask =  input_mask + ([0] * padding_length)
+    segment_ids =  segment_ids + ([0] * padding_length)
+
+    assert len(input_ids) == max_seq_length
+    assert len(input_mask) == max_seq_length
+    assert len(segment_ids) == max_seq_length
+
+    # if example_index < 0 and is_training:
+    #     logger.info("*** Example ***")
+    #     logger.info("index: {}".format(example.index))
+    #     logger.info("tokens:{}".format(' '.join(tokens)))
+    #     logger.info("input_ids: {}".format(' '.join(map(str, input_ids))))
+    #     logger.info("input_mask: {}".format(' '.join(map(str, input_mask))))
+    #     logger.info("segment_ids: {}".format(' '.join(map(str, segment_ids))))
+    #     logger.info("label: {}".format(label))
+
+    return input_ids, input_mask, segment_ids
+
 def convert_examples_to_features(examples, tokenizer, max_seq_length,
-                                 is_training):
-    """Loads a data file into a list of `InputBatch`s."""
-
-    # Swag is a multiple choice task. To perform this task using Bert,
-    # we will use the formatting proposed in "Improving Language
-    # Understanding by Generative Pre-Training" and suggested by
-    # @jacobdevlin-google in this issue
-    # https://github.com/google-research/bert/issues/38.
-    #
-    # Each choice will correspond to a sample on which we run the
-    # inference. For a given Swag example, we will create the 4
-    # following inputs:
-    # - [CLS] context [SEP] choice_1 [SEP]
-    # - [CLS] context [SEP] choice_2 [SEP]
-    # - [CLS] context [SEP] choice_3 [SEP]
-    # - [CLS] context [SEP] choice_4 [SEP]
-    # The model will output a single value for each input. To get the
-    # final decision of the model, we will run a softmax over these 4
-    # outputs.
-
+                                 mode, is_training=True):
     features = []
+    prior_features, claim_features = [], []
     for example_index, example in enumerate(examples):
         if example_index % 1000 == 0:
             logger.info('Processing {} examples...'.format(example_index))
 
         prior = tokenizer.tokenize(example.prior)
         claim = tokenizer.tokenize(example.claim)
+        prior, claim = _truncate_seq_pair(prior, claim, max_seq_length, mode=mode)
 
-        # Modifies `context_tokens_choice` and `ending_tokens` in
-        # place so that the total length is less than the
-        # specified length.  Account for [CLS], [SEP], [SEP] with
-        # "- 3"
-        _truncate_seq_pair(prior, claim, max_seq_length - 3)
-        tokens = ['<s>'] + prior + ["</s>"] + claim + ["</s>"]
-
-        # segment_ids = [0] * (len(prior) + 1) + [1] * (len(claim) + 1) + [2]
-        # segment_ids = [0] * (len(context_tokens_choice) + 1) + [0] * (len(ending_tokens) + 1) + [0]
-        segment_ids = [0] * len(tokens)
-        input_ids = tokenizer.convert_tokens_to_ids(tokens)
-        input_mask = [1] * len(input_ids)
-
-        padding_length = max_seq_length - len(input_ids)
-        input_ids =  input_ids + ([0] * padding_length)
-        input_mask =  input_mask + ([0] * padding_length)
-        segment_ids =  segment_ids + ([0] * padding_length)
-
-        assert len(input_ids) == max_seq_length
-        assert len(input_mask) == max_seq_length
-        assert len(segment_ids) == max_seq_length
-
-        label = int(example.label) if example.label is not None else None
-        if example_index < 0 and is_training:
-            logger.info("*** Example ***")
-            logger.info("index: {}".format(example.index))
-            logger.info("tokens:{}".format(' '.join(tokens)))
-            logger.info("input_ids: {}".format(' '.join(map(str, input_ids))))
-            logger.info("input_mask: {}".format(' '.join(map(str, input_mask))))
-            logger.info("segment_ids: {}".format(' '.join(map(str, segment_ids))))
-            logger.info("label: {}".format(label))
-
-        features.append(
-            InputFeatures(
-                example_id=example.index,
-                input_ids=input_ids,
-                input_mask=input_mask,
-                segment_ids=segment_ids,
-                label=label
+        if mode == "cross":
+            tokens = ['<s>'] + prior + ["</s>"] + claim + ["</s>"]
+            input_ids, input_mask, segment_ids = tokens_to_ids(tokenizer, tokens, max_seq_length)
+            label = int(example.label) if example.label is not None else None
+            features.append(
+                InputFeatures(
+                    example_id=example.index,
+                    input_ids=input_ids,
+                    input_mask=input_mask,
+                    segment_ids=segment_ids,
+                    label=label
+                )
             )
-        )
 
-    return features
+        elif mode == "bi":
+            prior_input_ids, prior_input_mask, prior_segment_ids = tokens_to_ids(tokenizer, ['<s>'] + prior, max_seq_length)
+            claim_input_ids, claim_input_mask, claim_segment_ids = tokens_to_ids(tokenizer, ['<s>'] + claim, max_seq_length)
+            label = int(example.label) if example.label is not None else None
+            prior_features.append(
+                InputFeatures(
+                    example_id=example.index,
+                    input_ids=prior_input_ids,
+                    input_mask=prior_input_mask,
+                    segment_ids=prior_segment_ids,
+                    label=label
+                )
+            )
+            claim_features.append(
+                InputFeatures(
+                    example_id=example.index,
+                    input_ids=claim_input_ids,
+                    input_mask=claim_input_mask,
+                    segment_ids=claim_segment_ids,
+                    label=label
+                )
+            )
+
+    if mode == "cross":
+        return features
+
+    elif mode == "bi":
+        return (prior_features, claim_features)
 
 
-def _truncate_seq_pair(tokens_a, tokens_b, max_length):
+def _truncate_seq_pair(tokens_a, tokens_b, max_length, mode="cross"):
     """Truncates a sequence pair in place to the maximum length."""
-    while True:
-        total_length = len(tokens_a) + len(tokens_b)
-        if total_length <= max_length:
-            break
-        if len(tokens_a) > len(tokens_b):
-            tokens_a.pop()
-        else:
-            tokens_b.pop()
+    if mode == "cross":
+        max_length = max_length - 3
+        while True:
+            total_length = len(tokens_a) + len(tokens_b)
+            if total_length <= max_length:
+                break
+            if len(tokens_a) > len(tokens_b):
+                tokens_a.pop()
+            else:
+                tokens_b.pop()
+        
+    elif mode == "bi":
+        max_length -= 1
+        if len(tokens_a) > max_length:
+            tokens_a = tokens_a[:max_length]
+        if len(tokens_b) > max_length:
+            tokens_b = tokens_b[:max_length]
+    
+    return tokens_a, tokens_b
+
 
 def sigmoid(x):
   return 1 / (1 + np.exp(-x))
 
-def accuracy(out, true_labels):
-    return np.sum((sigmoid(out) > 0.5) == true_labels)
+def accuracy(out, true_labels, logits=True):
+    if logits:
+        return np.sum((sigmoid(out) > 0.5) == true_labels)
+    else:
+        return np.sum((out > 0.5) == true_labels)
 
-def auc(out, true_labels):
-    labels = (sigmoid(out) > 0.5)
+def auc(out, true_labels, logits=True):
+    if logits:
+        labels = (sigmoid(out) > 0.5)
+    else:
+        labels = out > 0.5
     fpr, tpr, thresholds = roc_curve(true_labels, labels, pos_label=1)
     auc_val = _auc(fpr, tpr)
     # aps = average_precision_score(true_labels, labels)
@@ -282,7 +308,10 @@ class Adapter(nn.Module):
 class PretrainedModel(nn.Module):
     def __init__(self, args):
         super(PretrainedModel, self).__init__()
-        self.model = AutoModel.from_pretrained("princeton-nlp/sup-simcse-roberta-large") # RobertaModel.from_pretrained("roberta-large", output_hidden_states=True)
+        if args.model_name_or_path == 'roberta-large':
+            self.model = RobertaModel.from_pretrained("roberta-large", output_hidden_states=True)
+        elif args.model_name_or_path == 'simsce':
+            self.model = AutoModel.from_pretrained("princeton-nlp/sup-simcse-roberta-large")
 
         self.config = self.model.config
         self.config.freeze_adapter = args.freeze_adapter
@@ -297,9 +326,9 @@ class PretrainedModel(nn.Module):
                              position_ids=position_ids,
                              token_type_ids=token_type_ids,
                              attention_mask=attention_mask,
-                             head_mask=head_mask,
-                             output_hidden_states=True,
-                             return_dict=True)
+                             head_mask=head_mask)
+                             # output_hidden_states=True,
+                            #  return_dict=True)
 
         return outputs  # (logits), (pooler_outputs), (hidden_states), (attentions)
     def save_pretrained(self, save_directory):
@@ -505,7 +534,7 @@ class patentModel(nn.Module):
             loss = loss_fct(sigmoid(reshaped_logits).squeeze(dim=1), labels)
             return (loss, outputs[0])
         else:
-            return outputs[0]
+            return sequence_output
 
     def save_pretrained(self, save_directory):
         assert os.path.isdir(
@@ -536,6 +565,20 @@ def load_pretrained_adapter(adapter, adapter_path):
     model_dict.update(changed_adapter_meta)
     new_adapter.load_state_dict(model_dict)
     return new_adapter
+
+
+def cosine_sim(priors, claims, bz, normalize, device):
+    priors = torch.reshape(priors, (bz, -1))
+    claims = torch.reshape(claims, (bz, -1))
+    if normalize:
+        priors = ((priors-torch.mean(priors))/torch.std(priors))
+        claims = ((claims-torch.mean(claims))/torch.std(claims))
+        # print(priors.shape)
+    cosines = cosine_similarity(priors, claims, dim=1)
+    cosines = torch.where(cosines > 0, cosines, torch.zeros(bz).to(device))
+
+    return torch.where(cosines < 1, cosines, torch.ones(bz).to(device)).unsqueeze(dim=1)
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -608,7 +651,7 @@ def main():
                         help="Number of updates steps to accumulate before performing a backward/update pass.")
     parser.add_argument("--learning_rate", default=5e-5, type=float,
                         help="The initial learning rate for Adam.")
-    parser.add_argument("--weight_decay", default=0.0, type=float,
+    parser.add_argument("--weight_decay", default=0.01, type=float,
                         help="Weight deay if we apply some.")
     parser.add_argument("--adam_epsilon", default=1e-8, type=float,
                         help="Epsilon for Adam optimizer.")
@@ -658,17 +701,24 @@ def main():
                         help="Rate of adapter loss")
     parser.add_argument('--metrics', type=str, default='accuracy',
                         help="Metrics to determine the best model")
+    parser.add_argument('--mode', type=str, default='cross',
+                        help="Either one of cross-encoder (cross) or bi-coder (bi)")
+    parser.add_argument('--normalize', type=bool, default=True,
+                        help="Whether to apply normalization before cosine similarity measurement in the bi-encoder setting")
+    # --meta_bertmodel="./proc_data/roberta_patentmatch/patentmatch_batch-8_lr-5e-06_warmup-0_epoch-6.0_concat/pytorch_bertmodel_4400_0.5436605821410952.bin"
+    
     args = parser.parse_args()
     args = parser.parse_args()
 
     args.adapter_list = args.adapter_list.split(',')
     args.adapter_list = [int(i) for i in args.adapter_list]
 
-    args.my_model_name = str(args.comment)
-    args.output_dir = os.path.join(args.output_dir, args.comment)
+    name_prefix = str(args.comment)
+    args.my_model_name = name_prefix
+    args.output_dir = os.path.join(args.output_dir, name_prefix)
 
-    # if os.path.exists(args.output_dir) and os.listdir(args.output_dir) and args.do_train and not args.overwrite_output_dir:
-    #     raise ValueError("Output directory ({}) already exists and is not empty. Use --overwrite_output_dir to overcome.".format(args.output_dir))
+    if os.path.exists(args.output_dir) and os.listdir(args.output_dir) and args.do_train and not args.overwrite_output_dir:
+        raise ValueError("Output directory ({}) already exists and is not empty. Use --overwrite_output_dir to overcome.".format(args.output_dir))
 
     # Setup distant debugging if needed
     if args.server_ip and args.server_port:
@@ -709,8 +759,14 @@ def main():
         torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
 
     args.model_type = args.model_type.lower()
-
-    tokenizer = AutoTokenizer.from_pretrained("princeton-nlp/sup-simcse-roberta-large") # RobertaTokenizer.from_pretrained('roberta-large')
+    
+    if args.model_name_or_path == 'roberta-large':
+        tokenizer = RobertaTokenizer.from_pretrained('roberta-large')
+    elif args.model_name_or_path == 'simsce':
+        tokenizer = AutoTokenizer.from_pretrained("princeton-nlp/sup-simcse-roberta-large")
+    # special_tokens_dict = {'cls_token': '<cls>', 'start_token':'<s>', 'sep_token':'</s>'}
+    # tokenizer.add_special_tokens(special_tokens_dict)
+    # model.resize_token_embeddings(len(tokenizer))
 
     pretrained_model = PretrainedModel(args)
     if args.meta_fac_adaptermodel:
@@ -797,19 +853,39 @@ def main():
         train_examples = read_examples_dict[args.preprocess_type](os.path.join(args.data_dir, 'train.jsonl'),
                                                                   is_training=True)
         train_features = convert_examples_to_features_dict[args.preprocess_type](
-            train_examples, tokenizer, args.max_seq_length, True)
-        all_input_ids = torch.tensor([f.input_ids for f in train_features], dtype=torch.long)
-        all_input_mask = torch.tensor([f.input_mask for f in train_features], dtype=torch.long)
-        all_segment_ids = torch.tensor([f.segment_ids for f in train_features], dtype=torch.long)
-        all_label = torch.tensor([f.label for f in train_features], dtype=torch.float32)
-        train_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label)
-        if args.local_rank == -1:
-            train_sampler = RandomSampler(train_data)
-        else:
-            train_sampler = DistributedSampler(train_data)
-        batch_size = batch_size=args.train_batch_size // args.gradient_accumulation_steps
-        train_dataloader = DataLoader(train_data, sampler=train_sampler,
-                                      batch_size=batch_size)
+            train_examples, tokenizer, args.max_seq_length, args.mode, is_training=True)
+        
+        if args.mode == "cross":
+            all_input_ids = torch.tensor([f.input_ids for f in train_features], dtype=torch.long)
+            all_input_mask = torch.tensor([f.input_mask for f in train_features], dtype=torch.long)
+            all_segment_ids = torch.tensor([f.segment_ids for f in train_features], dtype=torch.long)
+            all_label = torch.tensor([f.label for f in train_features], dtype=torch.float32)
+            train_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label)
+            if args.local_rank == -1:
+                train_sampler = RandomSampler(train_data)
+            else:
+                train_sampler = DistributedSampler(train_data)
+            batch_size = batch_size=args.train_batch_size // args.gradient_accumulation_steps
+            train_dataloader = DataLoader(train_data, sampler=train_sampler,
+                                        batch_size=batch_size)
+        elif args.mode == "bi":
+            train_prior_features, train_claim_features = train_features
+            prior_all_input_ids = torch.tensor([f.input_ids for f in train_prior_features], dtype=torch.long)
+            prior_all_input_mask = torch.tensor([f.input_mask for f in train_prior_features], dtype=torch.long)
+            prior_all_segment_ids = torch.tensor([f.segment_ids for f in train_prior_features], dtype=torch.long)
+            prior_all_label = torch.tensor([f.label for f in train_prior_features], dtype=torch.float32)
+            train_prior_data = TensorDataset(prior_all_input_ids, prior_all_input_mask, prior_all_segment_ids, prior_all_label)
+
+            claim_all_input_ids = torch.tensor([f.input_ids for f in train_claim_features], dtype=torch.long)
+            claim_all_input_mask = torch.tensor([f.input_mask for f in train_claim_features], dtype=torch.long)
+            claim_all_segment_ids = torch.tensor([f.segment_ids for f in train_claim_features], dtype=torch.long)
+            claim_all_label = torch.tensor([f.label for f in train_claim_features], dtype=torch.float32)
+            train_claim_data = TensorDataset(claim_all_input_ids, claim_all_input_mask, claim_all_segment_ids, claim_all_label)
+    
+            batch_size = batch_size=args.train_batch_size // args.gradient_accumulation_steps
+            train_prior_dataloader = DataLoader(train_prior_data, batch_size=batch_size)
+            train_claim_dataloader = DataLoader(train_claim_data, batch_size=batch_size)
+
         if args.train_steps > 0:
             num_train_optimization_steps = args.train_steps
         else:
@@ -867,37 +943,95 @@ def main():
         train_accuracy = 0  # accumulative accuracy
 
         bar = tqdm(range(num_train_optimization_steps), total=num_train_optimization_steps)
-        train_dataloader = cycle(train_dataloader)
+        if args.mode == "cross":
+            train_dataloader = cycle(train_dataloader)
+        elif args.mode == "bi":
+            loss_fct = BCELoss()
+            train_prior_dataloader = cycle(train_prior_dataloader)
+            train_claim_dataloader = cycle(train_claim_dataloader) 
         eval_flag = True
+
         for step in bar:
-            batch = next(train_dataloader)
-            batch = tuple(t.to(device) for t in batch)
-            input_ids, input_mask, segment_ids, label_ids = batch
-            pretrained_model_outputs = pretrained_model(input_ids=input_ids, token_type_ids=segment_ids, attention_mask=input_mask, labels=label_ids)
-            loss, output_logits = patent_model(pretrained_model_outputs,input_ids=input_ids, token_type_ids=segment_ids, attention_mask=input_mask, labels=label_ids)
-            output_logits = output_logits.detach().cpu().numpy()
-            label_ids = label_ids.to('cpu').numpy()
+            if args.mode == "cross":
+                batch = next(train_dataloader)
+                batch = tuple(t.to(device) for t in batch)
+                input_ids, input_mask, segment_ids, label_ids = batch
+                pretrained_model_outputs = pretrained_model(input_ids=input_ids, token_type_ids=segment_ids, attention_mask=input_mask, labels=label_ids)
+                loss, output_logits = patent_model(pretrained_model_outputs, input_ids=input_ids, token_type_ids=segment_ids, attention_mask=input_mask, labels=label_ids)
+                output_logits = output_logits.detach().cpu().numpy()
+                label_ids = label_ids.to('cpu').numpy()
 
-            if args.n_gpu > 1:
-                loss = loss.mean()  # mean() to average on multi-gpu.
-            if args.fp16 and args.loss_scale != 1.0:
-                loss = loss * args.loss_scale
-            if args.gradient_accumulation_steps > 1:
-                loss = loss / args.gradient_accumulation_steps
+                if args.n_gpu > 1:
+                    loss = loss.mean()  # mean() to average on multi-gpu.
+                if args.fp16 and args.loss_scale != 1.0:
+                    loss = loss * args.loss_scale
+                if args.gradient_accumulation_steps > 1:
+                    loss = loss / args.gradient_accumulation_steps
 
-            tr_loss += loss.item()
-            train_loss = round(tr_loss * args.gradient_accumulation_steps / (nb_tr_steps + 1), 4)
-            bar.set_description("loss {}".format(train_loss))
+                tr_loss += loss.item()
+                train_loss = round(tr_loss * args.gradient_accumulation_steps / (nb_tr_steps + 1), 4)
+                bar.set_description("loss {}".format(train_loss))
 
-            train_accuracy += accuracy(output_logits, label_ids)
-            if args.logging_steps > 0 and global_step % args.logging_steps == 0 and (nb_tr_steps + 1) % args.gradient_accumulation_steps == 1:
-                output_logits_auc = output_logits.copy()
-                label_ids_auc = label_ids.copy()
-            else:    
-                output_logits_auc = np.concatenate((output_logits_auc, output_logits), axis=0)
-                label_ids_auc = np.concatenate((label_ids_auc, label_ids), axis=0)
-            nb_tr_examples += input_ids.size(0)
-            nb_tr_steps += 1
+                train_accuracy += accuracy(output_logits, label_ids)
+                # np.sum((sigmoid(out) > 0.5) == true_labels)
+                if args.logging_steps > 0 and global_step % args.logging_steps == 0 and (nb_tr_steps + 1) % args.gradient_accumulation_steps == 1:
+                    output_logits_auc = output_logits.copy()
+                    label_ids_auc = label_ids.copy()
+                else:    
+                    output_logits_auc = np.concatenate((output_logits_auc, output_logits), axis=0)
+                    label_ids_auc = np.concatenate((label_ids_auc, label_ids), axis=0)
+                nb_tr_examples += input_ids.size(0)
+                nb_tr_steps += 1
+
+            elif args.mode == "bi":
+                prior_batch = next(train_prior_dataloader)
+                claim_batch = next(train_claim_dataloader)
+                prior_batch = tuple(t.to(device) for t in prior_batch)
+                claim_batch = tuple(t.to(device) for t in claim_batch)
+                prior_input_ids, prior_input_mask, prior_segment_ids, label_ids = prior_batch
+                claim_input_ids, claim_input_mask, claim_segment_ids, claim_label_ids = claim_batch
+                assert torch.ne(label_ids, claim_label_ids).sum() == 0
+
+                prior_pretrained_model_outputs = pretrained_model(input_ids=prior_input_ids, token_type_ids=prior_segment_ids, attention_mask=prior_input_mask)
+                prior_output_logits = patent_model(prior_pretrained_model_outputs, input_ids=prior_input_ids, token_type_ids=prior_segment_ids, attention_mask=prior_input_mask)
+
+                claim_pretrained_model_outputs = pretrained_model(input_ids=claim_input_ids, token_type_ids=claim_segment_ids, attention_mask=claim_input_mask)
+                claim_output_logits = patent_model(claim_pretrained_model_outputs, input_ids=claim_input_ids, token_type_ids=claim_segment_ids, attention_mask=claim_input_mask)
+
+                # TypeError: can't convert cuda:0 device type tensor to numpy. Use Tensor.cpu() to copy the tensor to host memory first.
+                cosines = cosine_sim(prior_output_logits[:,0,:], claim_output_logits[:,0,:], prior_output_logits.shape[0], args.normalize, device) # -> (bz, 1)
+                loss = loss_fct(cosines, label_ids.unsqueeze(dim=1))
+
+                if args.n_gpu > 1:
+                    loss = loss.mean()  # mean() to average on multi-gpu.
+                if args.fp16 and args.loss_scale != 1.0:
+                    loss = loss * args.loss_scale
+                if args.gradient_accumulation_steps > 1:
+                    loss = loss / args.gradient_accumulation_steps
+
+                tr_loss += loss.item()
+                train_loss = round(tr_loss * args.gradient_accumulation_steps / (nb_tr_steps + 1), 4)
+                bar.set_description("loss {}".format(train_loss))
+
+                output_logits = cosines.detach().cpu().numpy()
+                label_ids = label_ids.to('cpu').numpy()
+                train_accuracy += accuracy(output_logits, label_ids, logits=False)
+            
+                if args.logging_steps > 0 and global_step % args.logging_steps == 0 and (nb_tr_steps + 1) % args.gradient_accumulation_steps == 1:
+                    output_logits_auc = output_logits.copy()
+                    label_ids_auc = label_ids.copy()
+                else:
+                    output_logits_auc = np.concatenate((output_logits_auc, output_logits), axis=0)
+                    label_ids_auc = np.concatenate((label_ids_auc, label_ids), axis=0)
+
+                nb_tr_examples += prior_input_ids.size(0)
+                nb_tr_steps += 1
+
+            # # Regularization - omitted (same as weight decay)
+            # l2_lambda = 0.001
+            # l2_norm = sum(p.pow(2.0).sum()
+            #             for p in patent_model.parameters())
+            # loss = loss + l2_lambda * l2_norm
 
             if args.fp16:
                 optimizer.backward(loss)
@@ -911,6 +1045,7 @@ def main():
                     lr_this_step = args.learning_rate * warmup_linear.get_lr(global_step, args.warmup_proportion)
                     for param_group in optimizer.param_groups:
                         param_group['lr'] = lr_this_step
+
                 optimizer.step()
                 optimizer.zero_grad()
                 scheduler.step()
@@ -922,70 +1057,136 @@ def main():
                     tb_writer.add_scalar('accuracy', train_accuracy / nb_tr_examples, global_step)
                     tb_writer.add_scalar('loss', (tr_loss - logging_loss) / args.logging_steps, global_step)
                     logging_loss = tr_loss
-                    train_auc = auc(output_logits_auc, label_ids_auc)
+                    train_auc = auc(output_logits_auc, label_ids_auc, logits=False)
                     tb_writer.add_scalar('auc', train_auc, global_step)
-        
+                    # result = {'accuracy': train_accuracy / nb_tr_examples,
+                    #           'loss': (tr_loss - logging_loss) / args.logging_steps,
+                    #           'auc': train_auc}
+                    # logger.info(result)
 
             if args.do_eval and ((global_step + 1) % args.eval_steps == 0) and eval_flag:
                 eval_flag = False
                 print('eval...')
                 for file in ['valid.jsonl']:
+
                     eval_examples = read_examples_dict[args.preprocess_type](os.path.join(args.data_dir, file),
                                                                              is_training=True)
                     inference_labels = []
                     gold_labels = []
                     eval_features = convert_examples_to_features_dict[args.preprocess_type](
-                        eval_examples, tokenizer, args.max_seq_length, False)
+                        eval_examples, tokenizer, args.max_seq_length, args.mode, is_training=True)
                     logger.info("***** Running evaluation *****")
                     logger.info("  Num examples = %d", len(eval_examples))
                     logger.info("  Batch size = %d", args.eval_batch_size)
-                    all_input_ids = torch.tensor([f.input_ids for f in eval_features], dtype=torch.long)
-                    all_input_mask = torch.tensor([f.input_mask for f in eval_features], dtype=torch.long)
-                    all_segment_ids = torch.tensor([f.segment_ids for f in eval_features], dtype=torch.long)
-                    all_label = torch.tensor([f.label for f in eval_features], dtype=torch.float32)
-                    eval_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label)
-                    # Run prediction for full data
-                    eval_sampler = SequentialSampler(eval_data)
-                    eval_dataloader = DataLoader(eval_data, sampler=eval_sampler, batch_size=args.eval_batch_size)
+
+                    if args.mode == "cross":
+                        all_input_ids = torch.tensor([f.input_ids for f in eval_features], dtype=torch.long)
+                        all_input_mask = torch.tensor([f.input_mask for f in eval_features], dtype=torch.long)
+                        all_segment_ids = torch.tensor([f.segment_ids for f in eval_features], dtype=torch.long)
+                        all_label = torch.tensor([f.label for f in eval_features], dtype=torch.float32)
+                        eval_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label)
+                        # Run prediction for full data
+                        eval_sampler = SequentialSampler(eval_data)
+                        eval_dataloader = DataLoader(eval_data, sampler=eval_sampler, batch_size=args.eval_batch_size)
+
+                    elif args.mode == "bi":
+                        eval_prior_features, eval_claim_features = eval_features
+                        prior_all_input_ids = torch.tensor([f.input_ids for f in eval_prior_features], dtype=torch.long)
+                        prior_all_input_mask = torch.tensor([f.input_mask for f in eval_prior_features], dtype=torch.long)
+                        prior_all_segment_ids = torch.tensor([f.segment_ids for f in eval_prior_features], dtype=torch.long)
+                        prior_all_label = torch.tensor([f.label for f in eval_prior_features], dtype=torch.float32)
+                        eval_prior_data = TensorDataset(prior_all_input_ids, prior_all_input_mask, prior_all_segment_ids, prior_all_label)
+
+                        claim_all_input_ids = torch.tensor([f.input_ids for f in eval_claim_features], dtype=torch.long)
+                        claim_all_input_mask = torch.tensor([f.input_mask for f in eval_claim_features], dtype=torch.long)
+                        claim_all_segment_ids = torch.tensor([f.segment_ids for f in eval_claim_features], dtype=torch.long)
+                        claim_all_label = torch.tensor([f.label for f in eval_claim_features], dtype=torch.float32)
+                        eval_claim_data = TensorDataset(claim_all_input_ids, claim_all_input_mask, claim_all_segment_ids, claim_all_label)
+                
+                        eval_prior_dataloader = DataLoader(eval_prior_data, batch_size=1)
+                        eval_claim_dataloader = iter(DataLoader(eval_claim_data, batch_size=1))
+
 
                     pretrained_model.eval()
                     patent_model.eval()
                     eval_loss, eval_accuracy = 0, 0
                     nb_eval_steps, nb_eval_examples = 0, 0
 
-                    for input_ids, input_mask, segment_ids, label_ids in eval_dataloader:
-                        start = time.time()
-                        input_ids = input_ids.to(device)
-                        input_mask = input_mask.to(device)
-                        segment_ids = segment_ids.to(device)
-                        label_ids = label_ids.to(device)
+                    if args.mode == "cross":
+                        for input_ids, input_mask, segment_ids, label_ids in eval_dataloader:
+                            input_ids = input_ids.to(device)
+                            input_mask = input_mask.to(device)
+                            segment_ids = segment_ids.to(device)
+                            label_ids = label_ids.to(device)
 
-                        with torch.no_grad():
-                            pretrained_model_outputs = pretrained_model(input_ids=input_ids, token_type_ids=segment_ids,
-                                                  attention_mask=input_mask, labels=label_ids)
-                            tmp_eval_loss, logits = patent_model(pretrained_model_outputs, input_ids=input_ids, token_type_ids=segment_ids, attention_mask=input_mask, labels=label_ids)
+                            with torch.no_grad():
+                                pretrained_model_outputs = pretrained_model(input_ids=input_ids, token_type_ids=segment_ids,
+                                                    attention_mask=input_mask, labels=label_ids)
+                                tmp_eval_loss, logits = patent_model(pretrained_model_outputs, input_ids=input_ids, token_type_ids=segment_ids, attention_mask=input_mask, labels=label_ids)
 
-                        logits = logits.detach().cpu().numpy()
-                        label_ids = label_ids.to('cpu').numpy()
-                        tmp_eval_accuracy = accuracy(logits, label_ids)
-                        inference_labels.append(sigmoid(logits)>0.5)
-                        gold_labels.append(label_ids)
-                        eval_loss += tmp_eval_loss.item()
-                        eval_accuracy += tmp_eval_accuracy
-                        
-                        nb_eval_steps += 1
-                        nb_eval_examples += input_ids.size(0)
-                        if nb_eval_steps == 1:
-                            logits_auc_ = logits.copy()
-                            label_ids_auc_ = label_ids.copy()
-                        else:
-                            logits_auc_ = np.concatenate((logits_auc_, logits), axis=0)
-                            label_ids_auc_ = np.concatenate((label_ids_auc_, label_ids), axis=0)
+                            logits = logits.detach().cpu().numpy()
+                            label_ids = label_ids.to('cpu').numpy()
+                            tmp_eval_accuracy = accuracy(logits, label_ids)
+                            inference_labels.append(sigmoid(logits)>0.5)
+                            gold_labels.append(label_ids)
+                            eval_loss += tmp_eval_loss.item()
+                            eval_accuracy += tmp_eval_accuracy
+                            
+                            nb_eval_steps += 1
+                            nb_eval_examples += input_ids.size(0)
+                            if nb_eval_steps == 1:
+                                logits_auc_ = logits.copy()
+                                label_ids_auc_ = label_ids.copy()
+                            else:
+                                logits_auc_ = np.concatenate((logits_auc_, logits), axis=0)
+                                label_ids_auc_ = np.concatenate((label_ids_auc_, label_ids), axis=0)
+
+                    elif args.mode == "bi":
+                        for prior_input_ids, prior_input_mask, prior_segment_ids, label_ids in eval_prior_dataloader:
+                            claim = next(eval_claim_dataloader)
+                            claim = tuple(t.to(device) for t in claim)
+                            claim_input_ids, claim_input_mask, claim_segment_ids, claim_label_ids = claim
+
+                            prior_input_ids = prior_input_ids.to(device)
+                            prior_input_mask = prior_input_mask.to(device)
+                            prior_segment_ids = prior_segment_ids.to(device)
+                            label_ids = label_ids.to(device)
+
+                            with torch.no_grad():
+                                prior_pretrained_model_outputs = pretrained_model(input_ids=prior_input_ids, token_type_ids=prior_segment_ids, attention_mask=prior_input_mask)
+                                prior_output_logits = patent_model(prior_pretrained_model_outputs, input_ids=prior_input_ids, token_type_ids=prior_segment_ids, attention_mask=prior_input_mask)
+
+                                claim_pretrained_model_outputs = pretrained_model(input_ids=claim_input_ids, token_type_ids=claim_segment_ids, attention_mask=claim_input_mask)
+                                claim_output_logits = patent_model(claim_pretrained_model_outputs, input_ids=claim_input_ids, token_type_ids=claim_segment_ids, attention_mask=claim_input_mask)
+
+                                cosines = cosine_sim(prior_output_logits[:,0,:], claim_output_logits[:,0,:], prior_output_logits.shape[0], args.normalize, device) # -> (bz, 1)
+                                eval_loss += loss_fct(cosines, label_ids.unsqueeze(dim=1))
+
+                                output_logits = cosines.detach().cpu().numpy()
+                                label_ids = label_ids.to('cpu').numpy()
+                                eval_accuracy += accuracy(output_logits, label_ids, logits=False)
+
+                            inference_labels.append(output_logits>0.5)
+                            gold_labels.append(label_ids)
+                            nb_eval_steps += 1
+                            nb_eval_examples += prior_input_ids.size(0)
+                            if nb_eval_steps == 1:
+                                logits_auc_ = output_logits.copy()
+                                label_ids_auc_ = label_ids.copy()
+                            else:
+                                logits_auc_ = np.concatenate((logits_auc_, output_logits), axis=0)
+                                label_ids_auc_ = np.concatenate((label_ids_auc_, label_ids), axis=0)
+                                        
+
 
                     eval_loss = eval_loss / nb_eval_steps
                     eval_accuracy = eval_accuracy / nb_eval_examples
                     if args.local_rank in [-1, 0]:
-                        eval_auc = auc(logits_auc_, label_ids_auc_)
+                        if args.mode == "cross":
+                            eval_auc = auc(logits_auc_, label_ids_auc_)
+                        elif args.mode == "bi":
+                            eval_auc = auc(logits_auc_, label_ids_auc_, logits=False)
+
                         tb_writer.add_scalar('eval_loss', eval_loss, global_step)
                         tb_writer.add_scalar('eval_accuracy', eval_accuracy, global_step)
                         tb_writer.add_scalar('eval_auc', eval_auc, global_step)
@@ -993,7 +1194,7 @@ def main():
                                 'eval_accuracy': eval_accuracy,
                                 'eval_auc': eval_auc,
                                 'global_step': global_step + 1,
-                                'loss': train_loss}
+                                'loss': eval_loss}
                         logger.info(result)
 
                     output_eval_file = os.path.join(args.output_dir, "eval_results.txt")
@@ -1004,17 +1205,17 @@ def main():
                         writer.write('*' * 80)
                         writer.write('\n')
 
-                    model_to_save = patent_model.module if hasattr(patent_model, 'module') else patent_model  # Take care of distributed/parallel training
+                    ## Save model at each step    
+                    # model_to_save = patent_model.module if hasattr(patent_model, 'module') else patent_model  # Take care of distributed/parallel training
                     # output_model_file = os.path.join(args.output_dir,
                     #                                  "pytorch_model_{}_{}.bin".format(global_step + 1,
                     #                                                                   eval_accuracy))
                     # torch.save(model_to_save.state_dict(), output_model_file)
-                    model_to_save = pretrained_model.module if hasattr(pretrained_model, 'module') else pretrained_model
+                    # model_to_save = pretrained_model.module if hasattr(pretrained_model, 'module') else pretrained_model
                     # output_model_file = os.path.join(args.output_dir,
                     #                                  "pytorch_bertmodel_{}_{}.bin".format(global_step + 1,
                     #                                                                   eval_accuracy))
                     # torch.save(model_to_save.state_dict(), output_model_file)
-
                     # early_stopping(eval_accuracy, best_acc)
                     if early_stopping.early_stop:
                         break
@@ -1034,6 +1235,9 @@ def main():
                                                                             'module') else pretrained_model
                             output_model_file = os.path.join(args.output_dir, "pytorch_bertmodel_best.bin")
                             torch.save(model_to_save.state_dict(), output_model_file)
+                        else:
+                            print("=" * 80)
+                            print("Best Acc", best_acc)
 
                     elif args.metrics == 'auc':
                         if eval_auc > best_auc:
@@ -1050,6 +1254,9 @@ def main():
                                                                             'module') else pretrained_model
                             output_model_file = os.path.join(args.output_dir, "pytorch_bertmodel_best.bin")
                             torch.save(model_to_save.state_dict(), output_model_file)
+                        else:
+                            print("=" * 80)
+                            print("Best AUC", best_auc)
 
 
                 if args.freeze_bert:
@@ -1066,3 +1273,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# test segment
+# eval

@@ -99,10 +99,11 @@ def collate_examples():
     examples = pd.DataFrame(data=examples)
     examples = examples.iloc[-80000:,:]
     examples = shuffle(examples)
+    examples = examples.iloc[-1000:,:]
     # print(examples.shape)
 
-    valid_file = open("valid.jsonl", "w")
-    train_file = open("train.jsonl", "w")
+    valid_file = open("../patent-sim-compact/valid.jsonl", "w")
+    train_file = open("../patent-sim-compact/train.jsonl", "w")
     valid_size = examples.shape[0] // 10
     valid = examples[-valid_size:].to_json(orient="records")
     train = examples[:-valid_size].to_json(orient="records")
@@ -136,6 +137,6 @@ def eda():
 
 if __name__ == "__main__":
     # make_full_section_corpus()
-    # collate_examples()
+    collate_examples()
     # check_json_format('valid.jsonl')
-    eda()
+    # eda()

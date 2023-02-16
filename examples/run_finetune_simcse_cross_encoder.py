@@ -284,7 +284,7 @@ class PretrainedModel(nn.Module):
         super(PretrainedModel, self).__init__()
         if args.model_name_or_path == 'roberta-large':
             self.model = RobertaModel.from_pretrained("roberta-large", output_hidden_states=True)
-        elif args.model_name_or_path == 'simsce':
+        elif args.model_name_or_path == 'simcse':
             self.model = AutoModel.from_pretrained("princeton-nlp/sup-simcse-roberta-large")
 
         self.config = self.model.config
@@ -718,7 +718,7 @@ def main():
     
     if args.model_name_or_path == 'roberta-large':
         tokenizer = RobertaTokenizer.from_pretrained('roberta-large')
-    elif args.model_name_or_path == 'simsce':
+    elif args.model_name_or_path == 'simcse':
         tokenizer = AutoTokenizer.from_pretrained("princeton-nlp/sup-simcse-roberta-large")
 
     pretrained_model = PretrainedModel(args)

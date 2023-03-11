@@ -1,5 +1,4 @@
 from __future__ import absolute_import, division, print_function
-
 import argparse
 import logging
 import os
@@ -7,7 +6,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.nn import BCELoss, MSELoss
-from info_nce import InfoNCE
 from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
                               TensorDataset)
 from torch.utils.data.distributed import DistributedSampler
@@ -17,27 +15,18 @@ import sys
 curPath = os.path.abspath(os.path.dirname(__file__))
 rootPath = os.path.split(curPath)[0]
 sys.path.append(rootPath)
-from pytorch_transformers.my_modeling_roberta import RobertaConfig, RoBERTaForMultipleChoice
-
 from pytorch_transformers.tokenization_roberta import RobertaTokenizer
-from transformers import AutoModel, AutoTokenizer
+from transformers import AutoTokenizer
 from itertools import cycle
-from pytorch_transformers import AdamW, WarmupLinearSchedule, RobertaModel
+from pytorch_transformers import AdamW, WarmupLinearSchedule
+from util import EarlyStopping, read_examples_origin, convert_examples_to_features, accuracy, infonce
+from util import sigmoid, auc, set_seed, PretrainedModel, AdapterModel, patentModel, load_pretrained_adapter, cosine_sim
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
                     datefmt='%m/%d/%Y %H:%M:%S',
                     level=logging.INFO)
 
-MODEL_CLASSES = {
-    'roberta': (RobertaConfig, RoBERTaForMultipleChoice, RobertaTokenizer),
-}
-ALL_MODELS = sum((tuple(conf.pretrained_config_archive_map.keys()) for conf in (RobertaConfig,)), ())
-
 logger = logging.getLogger(__name__)
-
-
-from util import EarlyStopping, Example, InputFeatures, read_examples_origin, tokens_to_ids, convert_examples_to_features, accuracy
-from util import _truncate_seq_pair, sigmoid, auc, set_seed, Adapter, PretrainedModel, AdapterModel, patentModel, load_pretrained_adapter, cosine_sim
 
 def main():
     parser = argparse.ArgumentParser()
@@ -45,24 +34,18 @@ def main():
     ## Required parameters
     parser.add_argument("--data_dir", default=None, type=str, required=True,
                         help="The input data dir. Should contain the .tsv files (or other data files) for the task.")
-    parser.add_argument("--model_type", default=None, type=str, required=True,
-                        help="Model type selected in the list: " + ", ".join(MODEL_CLASSES.keys()))
     parser.add_argument("--model_name_or_path", default=None, type=str, required=True,
-                        help="Path to pre-trained model or shortcut name selected in the list: " + ", ".join(ALL_MODELS))
-    parser.add_argument("--task_name", default='patentmatch', type=str,
-                        help="The name of the task to train selected in the list")
+                        help="Path to pre-trained model or shortcut name selected in the list: roberta-large, simcse")
     parser.add_argument("--comment", default='', type=str,
                         help="The comment")
     parser.add_argument("--output_dir", default=None, type=str, required=True,
                         help="The output directory where the model predictions and checkpoints will be written.")
 
-    parser.add_argument("--freeze_bert", default=True, type=bool,
+    parser.add_argument("--freeze_bert", default=False, type=bool,
                         help="freeze the parameters of pretrained model.")
     parser.add_argument("--freeze_adapter", default=False, type=bool,
                         help="freeze the parameters of adapter.")
 
-    parser.add_argument("--test_mode", default=0, type=int,
-                        help="test freeze adapter")
     parser.add_argument('--fusion_mode', type=str, default='concat',help='the fusion mode for bert feautre (and adapter feature) |add|concat|attentiom')
     parser.add_argument("--adapter_transformer_layers", default=2, type=int,
                         help="The transformer layers of adapter.")
@@ -80,28 +63,9 @@ def main():
     parser.add_argument('--meta_bertmodel', default='', type=str, help='the pretrained bert model')
 
     ## Other parameters
-    parser.add_argument("--config_name", default="", type=str,
-                        help="Pretrained config name or path if not the same as model_name")
-    parser.add_argument("--tokenizer_name", default="", type=str,
-                        help="Pretrained tokenizer name or path if not the same as model_name")
-    parser.add_argument("--cache_dir", default="", type=str,
-                        help="Where do you want to store the pre-trained models downloaded from s3")
     parser.add_argument("--max_seq_length", default=128, type=int,
                         help="The maximum total input sequence length after tokenization. Sequences longer "
                              "than this will be truncated, sequences shorter will be padded.")
-    parser.add_argument("--do_train", action='store_true',
-                        help="Whether to run training.")
-    parser.add_argument("--do_eval", action='store_true',
-                        help="Whether to run eval on the dev set.")
-    parser.add_argument("--do_test", action='store_true',
-                        help="Whether to make predictions on the test set")
-    parser.add_argument("--print_error_analysis", action='store_true',
-                        help='print the errors in valid dataset')
-    parser.add_argument("--evaluate_during_training", action='store_true',
-                        help="Rul evaluation during training at each logging step.")
-    parser.add_argument("--do_lower_case", action='store_true',
-                        help="Set this flag if you are using an uncased model.")
-
     parser.add_argument("--per_gpu_train_batch_size", default=8, type=int,
                         help="Batch size per GPU/CPU for training.")
     parser.add_argument("--per_gpu_eval_batch_size", default=8, type=int,
@@ -114,34 +78,20 @@ def main():
                         help="Weight deay if we apply some.")
     parser.add_argument("--adam_epsilon", default=1e-8, type=float,
                         help="Epsilon for Adam optimizer.")
-    parser.add_argument("--max_grad_norm", default=1.0, type=float,
-                        help="Max gradient norm.")
     parser.add_argument("--num_train_epochs", default=3.0, type=float,
                         help="Total number of training epochs to perform.")
-    parser.add_argument("--max_steps", default=-1, type=int,
-                        help="If > 0: set total number of training steps to perform. Override num_train_epochs.")
     parser.add_argument("--eval_steps", default=-1, type=int,
                         help="")
     parser.add_argument("--train_steps", default=-1, type=int,
                         help="")
-    parser.add_argument("--report_steps", default=-1, type=int,
-                        help="")
     parser.add_argument("--warmup_steps", default=0, type=int,
                         help="Linear warmup over warmup_steps.")
-
-
     parser.add_argument('--logging_steps', type=int, default=10,
                         help="Log every X updates steps.")
-    parser.add_argument('--save_steps', type=int, default=50,
-                        help="Save checkpoint every X updates steps.")
-    parser.add_argument("--eval_all_checkpoints", action='store_true',
-                        help="Evaluate all checkpoints starting with the same prefix as model_name ending and ending with step number")
     parser.add_argument("--no_cuda", action='store_true',
                         help="Avoid using CUDA when available")
     parser.add_argument('--overwrite_output_dir', action='store_true',
                         help="Overwrite the content of the output directory")
-    parser.add_argument('--overwrite_cache', action='store_true',
-                        help="Overwrite the cached training and evaluation sets")
     parser.add_argument('--seed', type=int, default=42,
                         help="random seed for initialization")
     parser.add_argument('--fp16', action='store_true',
@@ -174,10 +124,12 @@ def main():
     # --meta_bertmodel="./proc_data/roberta_patentmatch/patentmatch_batch-8_lr-5e-06_warmup-0_epoch-6.0_concat/pytorch_bertmodel_4400_0.5436605821410952.bin"
     
     args = parser.parse_args()
-    args = parser.parse_args()
 
     args.adapter_list = args.adapter_list.split(',')
     args.adapter_list = [int(i) for i in args.adapter_list]
+    args.do_train = True
+    args.do_eval = True
+    args.overwrite_output_dir = True
 
     name_prefix = str(args.comment)
     args.my_model_name = name_prefix
@@ -197,18 +149,20 @@ def main():
     # Setup CUDA, GPU & distributed training
     if args.local_rank == -1 or args.no_cuda:
         device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
-        args.n_gpu = torch.cuda.device_count() if device == "cuda" else 0
+        if device == torch.device("cuda"):
+            args.n_gpu = torch.cuda.device_count()
+        else:
+            args.n_gpu = 0
+        # print(torch.cuda.device_count(), args.n_gpu, device)
     else:  # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
         torch.cuda.set_device(args.local_rank)
         device = torch.device("cuda", args.local_rank)
         torch.distributed.init_process_group(backend='nccl')
         args.n_gpu = 1
-    args.device = device
 
+    args.device = device
+    
     # Setup logging
-    logging.basicConfig(format = '%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
-                        datefmt = '%m/%d/%Y %H:%M:%S',
-                        level = logging.INFO if args.local_rank in [-1, 0] else logging.WARN)
     logger.warning("Process rank: %s, device: %s, n_gpu: %s, distributed training: %s, 16-bits training: %s",
                     args.local_rank, device, args.n_gpu, bool(args.local_rank != -1), args.fp16)
 
@@ -223,8 +177,6 @@ def main():
     # Load pretrained model and tokenizer
     if args.local_rank not in [-1, 0]:
         torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
-
-    args.model_type = args.model_type.lower()
     
     if args.model_name_or_path == 'roberta-large':
         tokenizer = RobertaTokenizer.from_pretrained('roberta-large')
@@ -321,6 +273,20 @@ def main():
         train_features = convert_examples_to_features_dict[args.preprocess_type](
             train_examples, tokenizer, args.max_seq_length, args.mode, logger, is_training=True)
         
+        if args.train_steps > 0:
+            num_train_optimization_steps = args.train_steps
+        else:
+            args.train_steps = int(args.num_train_epochs * len(train_examples) // args.train_batch_size)
+            num_train_optimization_steps = args.train_steps
+        # Set up wandb
+        # wandb.init(
+        #     project='K-adapter',
+        #     name='Biencoder-hyperparams-sweep'+'-trial-1',
+        #     config=args
+        # )
+        # args = wandb.config
+
+        
         if args.mode == "cross":
             all_input_ids = torch.tensor([f.input_ids for f in train_features], dtype=torch.long)
             all_input_mask = torch.tensor([f.input_mask for f in train_features], dtype=torch.long)
@@ -351,13 +317,6 @@ def main():
             batch_size = batch_size=args.train_batch_size // args.gradient_accumulation_steps
             train_prior_dataloader = DataLoader(train_prior_data, batch_size=batch_size)
             train_claim_dataloader = DataLoader(train_claim_data, batch_size=batch_size)
-
-        if args.train_steps > 0:
-            num_train_optimization_steps = args.train_steps
-        else:
-            args.train_steps = int(args.num_train_epochs * len(train_examples) // args.train_batch_size)
-            num_train_optimization_steps = args.train_steps
-
 
         no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
         if args.freeze_bert:
@@ -407,8 +366,6 @@ def main():
         elif args.mode == "bi":
             if args.loss == "bce":
                 loss_fct = BCELoss()
-            elif args.loss == "infonce":
-                loss_fct = InfoNCE()
             elif args.loss == "mse":
                 loss_fct = MSELoss()
             
@@ -422,7 +379,7 @@ def main():
                 batch = tuple(t.to(device) for t in batch)
                 input_ids, input_mask, segment_ids, label_ids = batch
                 pretrained_model_outputs = pretrained_model(input_ids=input_ids, token_type_ids=segment_ids, attention_mask=input_mask, labels=label_ids)
-                loss, output_logits, fac_output_logits = patent_model(pretrained_model_outputs, input_ids=input_ids, token_type_ids=segment_ids, attention_mask=input_mask, labels=label_ids)
+                loss, output_logits, fac_output_logits = patent_model(pretrained_model_outputs, labels=label_ids)
                 output_logits = output_logits.detach().cpu().numpy()
                 label_ids = label_ids.to('cpu').numpy()
 
@@ -458,10 +415,10 @@ def main():
                 assert torch.ne(label_ids, claim_label_ids).sum() == 0
 
                 prior_pretrained_model_outputs = pretrained_model(input_ids=prior_input_ids, token_type_ids=prior_segment_ids, attention_mask=prior_input_mask)
-                prior_output_logits, prior_fac_logits = patent_model(prior_pretrained_model_outputs, input_ids=prior_input_ids, token_type_ids=prior_segment_ids, attention_mask=prior_input_mask)
+                prior_output_logits, prior_fac_logits = patent_model(prior_pretrained_model_outputs)
 
                 claim_pretrained_model_outputs = pretrained_model(input_ids=claim_input_ids, token_type_ids=claim_segment_ids, attention_mask=claim_input_mask)
-                claim_output_logits, claim_fac_logits = patent_model(claim_pretrained_model_outputs, input_ids=claim_input_ids, token_type_ids=claim_segment_ids, attention_mask=claim_input_mask)
+                claim_output_logits, claim_fac_logits = patent_model(claim_pretrained_model_outputs)
 
                 if args.pooling == "mean":
                     prior_vectors = torch.mean(prior_output_logits, dim=2)
@@ -479,19 +436,13 @@ def main():
                     cosines = cosine_sim(prior_vectors, claim_vectors, args.normalize, device) # -> (bz, 1)
                     fac_cosines = cosine_sim(prior_fac_vectors, claim_fac_vectors, args.normalize, device)  
 
-                # elif args.sim_measure == "linear_transform":
-                #     cosines = cosine_sim(prior_vectors, claim_vectors, args.normalize, device) # -> (bz, 1)
-                #     fac_cosines = cosine_sim(prior_fac_vectors, claim_fac_vectors, args.normalize, device)
-
                 labels = label_ids.unsqueeze(dim=1)
                 if args.loss == "bce":
                     loss = loss_fct(sigmoid(cosines), labels) + loss_fct(sigmoid(fac_cosines), labels)
                 elif args.loss == "infonce":
-                    loss = loss_fct(cosines, labels) + loss_fct(fac_cosines, labels)
+                    loss = infonce(prior_vectors, claim_vectors, prior_fac_vectors, claim_fac_vectors, labels)
                 elif args.loss == "mse":
                     loss = loss_fct(cosines, labels) + loss_fct(fac_cosines, labels)
-
-                # loss = loss_fct(cosines, label_ids.unsqueeze(dim=1)) + loss_fct(fac_cosines, label_ids.unsqueeze(dim=1))
 
                 if args.n_gpu > 1:
                     loss = loss.mean()  # mean() to average on multi-gpu.
@@ -604,7 +555,7 @@ def main():
                                 pretrained_model_outputs = pretrained_model(input_ids=input_ids, token_type_ids=segment_ids,
                                                     attention_mask=input_mask, labels=label_ids)
         
-                                tmp_eval_loss, logits, fac_logits = patent_model(pretrained_model_outputs, input_ids=input_ids, token_type_ids=segment_ids, attention_mask=input_mask, labels=label_ids)
+                                tmp_eval_loss, logits, fac_logits = patent_model(pretrained_model_outputs, labels=label_ids)
 
                             logits = logits.detach().cpu().numpy()
                             label_ids = label_ids.to('cpu').numpy()
@@ -636,10 +587,10 @@ def main():
 
                             with torch.no_grad():
                                 prior_pretrained_model_outputs = pretrained_model(input_ids=prior_input_ids, token_type_ids=prior_segment_ids, attention_mask=prior_input_mask)
-                                prior_output_logits, prior_fac_logits = patent_model(prior_pretrained_model_outputs, input_ids=prior_input_ids, token_type_ids=prior_segment_ids, attention_mask=prior_input_mask)
+                                prior_output_logits, prior_fac_logits = patent_model(prior_pretrained_model_outputs)
 
                                 claim_pretrained_model_outputs = pretrained_model(input_ids=claim_input_ids, token_type_ids=claim_segment_ids, attention_mask=claim_input_mask)
-                                claim_output_logits, claim_fac_logits = patent_model(claim_pretrained_model_outputs, input_ids=claim_input_ids, token_type_ids=claim_segment_ids, attention_mask=claim_input_mask)
+                                claim_output_logits, claim_fac_logits = patent_model(claim_pretrained_model_outputs)
 
                                 if args.pooling == "mean":
                                     prior_vectors = torch.mean(prior_output_logits, dim=2)
@@ -659,12 +610,12 @@ def main():
                             
 
                                 # loss = loss_fct(cosines, label_ids.unsqueeze(dim=1)) + loss_fct(fac_cosines, label_ids.unsqueeze(dim=1))
-                                labels = label_ids.unsqueeze(dim=1)
+                                labels = label_ids.unsqueeze(dim=1) # -> (bz, 1)
 
                                 if args.loss == "bce":
                                     loss = loss_fct(sigmoid(cosines), labels) + loss_fct(sigmoid(fac_cosines), labels)
                                 elif args.loss == "infonce":
-                                    loss = loss_fct(cosines, labels) + loss_fct(fac_cosines, labels)
+                                    loss = infonce(prior_vectors, claim_vectors, prior_fac_vectors, claim_fac_vectors, labels)
                                 elif args.loss == "mse":
                                     loss = loss_fct(cosines, labels) + loss_fct(fac_cosines, labels)
 
@@ -693,14 +644,19 @@ def main():
                         elif args.mode == "bi":
                             eval_auc = auc(logits_auc_, label_ids_auc_, logits=False)
 
+                        if args.mode == "bi":
+                            eval_loss = eval_loss.item()
+
                         tb_writer.add_scalar('eval_loss', eval_loss, global_step)
                         tb_writer.add_scalar('eval_accuracy', eval_accuracy, global_step)
                         tb_writer.add_scalar('eval_auc', eval_auc, global_step)
+                        
                         result = {'eval_loss': eval_loss,
                                 'eval_accuracy': eval_accuracy,
                                 'eval_auc': eval_auc,
                                 'global_step': global_step + 1,
-                                'loss': eval_loss}
+                                'loss': train_loss}
+                       
                         logger.info(result)
 
                     output_eval_file = os.path.join(args.output_dir, "eval_results.txt")

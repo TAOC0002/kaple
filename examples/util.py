@@ -9,6 +9,7 @@ import torch.nn as nn
 from torch.nn import BCELoss, Sigmoid, MultiheadAttention, MSELoss
 from torch.nn.functional import cosine_similarity
 from sklearn.metrics import auc as _auc, roc_curve
+from transformers import AutoModel
 import json
 import sys
 curPath = os.path.abspath(os.path.dirname(__file__))
@@ -68,13 +69,17 @@ class InputFeatures(object):
                  input_ids,
                  input_mask,
                  segment_ids,
-                 label
+                 label,
+                 pseudo_label=None,
+                 pseudo_fac_label=None
                  ):
         self.example_id = example_id
         self.input_ids = input_ids
         self.input_mask = input_mask
         self.segment_ids = segment_ids
         self.label = label
+        self.pseudo_label = pseudo_label
+        self.pseudo_fac_label = pseudo_fac_label
 
 
 def read_examples_origin(input_file, is_training):
@@ -115,11 +120,11 @@ def tokens_to_ids(tokenizer, tokens, max_seq_length):
     return input_ids, input_mask, segment_ids
 
 def convert_examples_to_features(examples, tokenizer, max_seq_length,
-                                 mode, logger, is_training=True):
+                                 mode, logger, is_training=True, verbose=False):
     features = []
     prior_features, claim_features = [], []
     for example_index, example in enumerate(examples):
-        if example_index % 1000 == 0:
+        if example_index % 1000 == 0 and verbose:
             logger.info('Processing {} examples...'.format(example_index))
 
         prior = tokenizer.tokenize(example.prior)
@@ -194,7 +199,11 @@ def _truncate_seq_pair(tokens_a, tokens_b, max_length, mode="cross"):
 
 
 def sigmoid(x):
-  return 1 / (1 + np.exp(-x))
+    try:
+        ans = 1 / (1 + np.exp(-x))
+    except:
+        ans = 1 / (1 + torch.exp(-x))
+    return ans
 
 def accuracy(out, true_labels, logits=True):
     if logits:
@@ -356,8 +365,6 @@ class AdapterModel(nn.Module):
         # if self.args.fusion_mode == 'attention':
         #     self.attention = MultiheadAttention(embed_dim=self.config.hidden_size, num_heads=self.config.num_attention_heads)
 
-        if args.test_mode == 2:
-            self.init_weights(0.1)
     def init_weights(self, init_range):
         logging.info("Initialize the parameters of the taskdense")
         for m in self.modules():
@@ -405,7 +412,7 @@ class AdapterModel(nn.Module):
 
 
 class patentModel(nn.Module):
-    def __init__(self, args, pretrained_model_config, fac_adapter, et_adapter, lin_adapter, max_seq_length, pooling="mean", loss="bce"):
+    def __init__(self, args, pretrained_model_config, fac_adapter, et_adapter, lin_adapter, max_seq_length, pooling="cls", loss="bce"):
         super(patentModel, self).__init__()
         self.args = args
         self.config = pretrained_model_config
@@ -450,8 +457,7 @@ class patentModel(nn.Module):
             self.classifier = nn.Linear(self.config.hidden_size, 1)
         self.loss = loss
 
-    def forward(self, pretrained_model_outputs, input_ids, token_type_ids=None, attention_mask=None, labels=None,
-                position_ids=None, head_mask=None):
+    def forward(self, pretrained_model_outputs, labels=None, pseudo_labels=None, pseudo_fac_labels=None, labelling=False):
         pretrained_model_last_hidden_states = pretrained_model_outputs[0]
         if self.fac_adapter is not None:
             fac_adapter_outputs, _ = self.fac_adapter(pretrained_model_outputs)
@@ -497,12 +503,10 @@ class patentModel(nn.Module):
         elif self.lin_adapter is not None:
             sequence_output = self.dropout(lin_features)
 
-        if labels is not None:
+        if labels is not None or pseudo_labels is not None or labelling:
             if self.loss == "bce":
                 loss_fct = BCELoss()
                 sigmoid = Sigmoid()
-            elif self.loss == "infonce":
-                loss_fct = InfoNCE()
             elif self.loss == "mse":
                 loss_fct = MSELoss()
 
@@ -519,15 +523,22 @@ class patentModel(nn.Module):
             reshaped_fac_logits = fac_logits.view(-1, self.num_labels)
             fac_outputs = reshaped_fac_logits.squeeze(dim=1)
 
-            if self.loss == "bce":
-                loss = loss_fct(sigmoid(outputs), labels) + loss_fct(sigmoid(fac_outputs), labels)
-            elif self.loss == "infonce":
-                loss = loss_fct(outputs, labels) + loss_fct(fac_outputs, labels)
-            elif self.loss == "mse":
-                loss = loss_fct(outputs, labels) + loss_fct(fac_outputs, labels)
+            if labelling:
+                return sigmoid(outputs), sigmoid(fac_outputs)
 
+            if labels is not None:
+                if self.loss == "bce":
+                    loss = loss_fct(sigmoid(outputs), labels) + loss_fct(sigmoid(fac_outputs), labels)
+                elif self.loss == "mse":
+                    loss = loss_fct(outputs, labels) + loss_fct(fac_outputs, labels)
+            else:
+                if self.loss == "bce":
+                    loss = loss_fct(sigmoid(outputs), pseudo_labels) + loss_fct(sigmoid(fac_outputs), pseudo_fac_labels)
+                elif self.loss == "mse":
+                    loss = loss_fct(outputs, pseudo_labels) + loss_fct(fac_outputs, pseudo_fac_labels)
             return (loss, outputs, fac_outputs)
-        else:
+        
+        elif not labels and not pseudo_labels:
             return sequence_output, fac_adapter_outputs
 
     def save_pretrained(self, save_directory):
@@ -571,3 +582,40 @@ def cosine_sim(priors, claims, normalize, device):
     cosines = torch.where(cosines > 0, cosines, torch.zeros(bz).to(device))
 
     return torch.where(cosines < 1, cosines, torch.ones(bz).to(device)).unsqueeze(dim=1)
+
+def reconstruct(prior, claim, labels, bz):
+    positive = torch.where(labels == 1, claim, prior)
+    for i in range(labels.shape[0]):
+        if i == 0:
+            if labels[i] == 0:
+                negative = claim[:-1,:].unsqueeze(0)
+            else:
+                negative = claim[1:,:].unsqueeze(0)
+        elif labels[i] == 0:
+            negative = torch.cat([negative, claim[1:,:].unsqueeze(0)], dim=0)
+        elif labels[i] == 1:
+            idx = [j for j in range(bz) if j != i]
+            negative = torch.cat([negative, claim[idx,:].unsqueeze(0)], dim=0)
+
+    return positive, negative
+
+def infonce(prior_vectors, claim_vectors, prior_fac_vectors, claim_fac_vectors, labels):
+    if len(labels.shape) != 2:
+        labels = labels.unsqueeze(1)
+    bz = prior_vectors.shape[0]
+    loss_fct = InfoNCE(negative_mode='paired')
+    pos, neg = reconstruct(prior_vectors, claim_vectors, labels, bz)
+    fac_pos, fac_neg = reconstruct(prior_fac_vectors, claim_fac_vectors, labels, bz)
+    loss = loss_fct(prior_vectors, pos, neg) + loss_fct(prior_fac_vectors, fac_pos, fac_neg)
+    return loss
+
+def load_model(model_path, model):
+    changed_bert_meta = {}
+    model_dict = model.state_dict()
+    bert_meta_dict = torch.load(model_path, map_location=lambda storage, loc: storage)
+    for key in bert_meta_dict.keys():
+        if key in model_dict.keys():
+            changed_bert_meta[key] = bert_meta_dict[key]
+    model_dict.update(changed_bert_meta)
+    model.load_state_dict(model_dict)
+    return model

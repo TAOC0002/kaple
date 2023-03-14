@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import json
+import pickle
 import itertools
 from sklearn.utils import shuffle
 from sqlalchemy import create_engine, Column, String
@@ -77,11 +78,11 @@ def make_combis(target_ids, random_ids, cited_ids, dupl_ids):
 
 
 def collate_examples():
-    corpus_abstract = np.load('corpus_abstract.npy', encoding="latin1").item()
+    corpus_abstract = np.load('corpus_abstract.npy', encoding="latin1", allow_pickle=True).item()
     target_ids = np.load('target_ids.npy', encoding="latin1")
     random_ids = np.load('random_ids.npy', encoding="latin1")
-    dupl_ids = np.load('dupl_ids.npy', encoding="latin1").item()
-    cited_ids = np.load('cited_ids.npy', encoding="latin1").item()
+    dupl_ids = np.load('dupl_ids.npy', encoding="latin1", allow_pickle=True).item()
+    cited_ids = np.load('cited_ids.npy', encoding="latin1", allow_pickle=True).item()
     id_dict = make_combis(target_ids, random_ids, cited_ids, dupl_ids)
 
     examples = {'index':[], 'text':[], 'text_b':[], 'label':[]}
@@ -97,8 +98,9 @@ def collate_examples():
             index += 1
 
     examples = pd.DataFrame(data=examples)
+    print(examples.shape)
     examples = examples.iloc[-80000:,:]
-    examples = shuffle(examples)
+    examples = shuffle(examples, random_state=42)
     examples = examples.iloc[-1000:,:]
     # print(examples.shape)
 
@@ -134,9 +136,48 @@ def eda():
     print(data.shape)
     print(sum(data['label']))
 
+def kpar_test_set_construction(size):
+    # inverse dictionary
+    corpus_abstract = np.load('corpus_abstract.npy', encoding="latin1", allow_pickle=True).item()
+    inv_map = {v: k for k, v in corpus_abstract.items()}
+    with open('../patent-sim-compact/train.jsonl') as f:
+        train = json.load(f)
+    with open('../patent-sim-compact/valid.jsonl') as g:
+        valid = json.load(g)
+
+    # find text_a which we haven't encountered before
+    text_a = set()
+    text_b = set()
+    for line in train:
+        text_a.add(inv_map[line['text']])
+        text_b.add(inv_map[line['text_b']])
+    for line in valid:
+        text_a.add(inv_map[line['text']])
+        text_b.add(inv_map[line['text_b']])
+
+    print('Number of patent application (text_a) in training and validation set:', len(text_a))
+    print('Number of prior art (text_b) in training and validation set:', len(text_b))
+
+    cited_ids = np.load('cited_ids.npy', encoding="latin1", allow_pickle=True).item()
+    test_ids = {text: text_b_list for text, text_b_list in cited_ids.items() if text not in text_a}
+    for test_id in test_ids:
+        text_b_list = [b for b in test_ids[test_id] if b in text_b]
+        test_ids[test_id] = text_b_list
+    test_ids = dict(sorted(test_ids.items(), key=lambda item: len(item[1]), reverse=True))
+    test_ids = dict(itertools.islice(test_ids.items(),size))
+    print('Construting test set with size', size, 'and their ground truth (known) in the corpus..')
+
+    array = [{'key': i, 'text': corpus_abstract[i], 'ground_truth': test_ids[i]} for i in test_ids]
+    test_file = open("../patent-sim-compact/test.jsonl", "w")
+    test_file.write(json.dumps(array, indent = 4))
+    test_file.close()
+    text_a.update(text_b)
+    with open('../patent-sim-compact/corpus_pool.pkl', 'wb') as c:
+        pickle.dump(text_a, c)
 
 if __name__ == "__main__":
     # make_full_section_corpus()
-    collate_examples()
+    # collate_examples()
     # check_json_format('valid.jsonl')
     # eda()
+    kpar_test_set_construction(size=100)

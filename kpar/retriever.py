@@ -8,7 +8,9 @@ import torch
 import torch.nn as nn
 import pickle
 import faiss
+import json
 import sys
+import time
 curPath = os.path.abspath(os.path.dirname(__file__))
 rootPath = os.path.split(curPath)[0]
 sys.path.append(rootPath)
@@ -84,21 +86,24 @@ if __name__ == "__main__":
 
     if args.function == 'construct_db':
         db_examples, embedding = compute_embed_pool(args.corpus_index_file, args.corpus_content_file, tokenizer, args.save_dir, pretrained_model, 
-                           patent_model, max_seq_length=args.max_seq_length)
+                           patent_model, logger, max_seq_length=args.max_seq_length)
         with open(os.join(args.save_dir, 'db_examples.pkl'), 'wb') as f:
             pickle.dump(db_examples, f)
         np.save(os.join(args.save_dir, 'db_embedding.npy'), embedding)
     
     elif args.function == 'query':
+        st = time.time()
         db_embeddings = np.load(os.join(args.save_dir, 'db_embedding.npy'), encoding="latin1")
         with open(os.join(args.save_dir, 'db_examples.pkl'), 'rb') as f:
             db_examples = pickle.load(f)
-        query_examples, embedding = compute_query_pool(args.query_file, tokenizer, args.save_dir, pretrained_model, patent_model, args.max_seq_length)
+        query_examples, embedding = compute_query_pool(args.query_file, tokenizer, args.save_dir, pretrained_model, patent_model, logger, max_seq_length=args.max_seq_length)
         N = embedding.shape[0]
         dim = embedding.shape[1]
+        logger.info('Time elapsed in loading db and constructing query embeddings: {:.2f}} seconds', time.time()-st)
 
         # faiss
-        nlist = 32
+        st = time.time()
+        nlist = args.nlist
         res = faiss.StandardGpuResources()  # use a single GPU
         quantizer = faiss.IndexFlatL2(dim)  # the other index
         index_ivf = faiss.IndexIVFFlat(quantizer, dim, nlist, faiss.METRIC_INNER_PRODUCT)
@@ -110,10 +115,12 @@ if __name__ == "__main__":
 
         gpu_index_ivf.add(db_embeddings)
         print(gpu_index_ivf.ntotal)
-        k = 5                         
-        D, I = gpu_index_ivf.search(embedding, k) 
+        k = args.topk                   
+        D, I = gpu_index_ivf.search(embedding, k)
+        logger.info('Time elapsed in the first stage of retrieval (faiss): {:.2f}} seconds', time.time()-st)
 
         # refinement
+        st = time.time()
         embedding = embedding.unsqueeze(dim=1).expand(N, k, dim)
         for i in range(N):
             for j in range(k):
@@ -129,6 +136,7 @@ if __name__ == "__main__":
         sorted, indices = torch.sort(cosines)
         ranking_tensor = torch.cat(tuple([torch.index_select(I[i], 0, indices[i]).unsqueeze(0) for i in range(10)]), 0) # in terms of numbering
         ranking_list = [[db_examples[y.item()].index for y in x] for x in ranking_tensor] # in terms of index
+        logger.info('Time elapsed in the second stage of retrieval (refinement): {:.2f}} seconds', time.time()-st)
 
         # commpute mrr@k, k = 5
         # Evaluate on all test data
@@ -146,4 +154,14 @@ if __name__ == "__main__":
         map_func = lambda y: torch.tensor([torch.tensor([(i+1)/x[i] for i in range(len(x))]).mean() for x in y]).mean().item() # 0.55555
         map_score = map_func(map_hits)
         logger.info('MRR@5: {}, MAP@5: {}'.format(mrr_score, map_score))
-        
+        res_file_path = os.join(args.save_dir, 'predictions.jsonl')
+        logger.info('Saving predictions to {} ...'.format())
+        for i in range(len(query_examples)):
+            query_examples[i].predictions = ranking_list[i]
+        results = [{'key': query.index, 'text': query.text, 'ground_truth': query.ground_truth, 'predictions': query.predictions} for query in query_examples]
+        res_file = open(res_file_path, "w")
+        res_file.write(json.dumps(results, indent = 4))
+        res_file.close()
+
+        with open(os.join(args.save_dir, 'query_results.pkl'), 'wb') as f:
+            pickle.dump(query_examples, f)

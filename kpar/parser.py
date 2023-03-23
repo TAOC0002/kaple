@@ -48,6 +48,10 @@ def parse(parser):
     parser.add_argument('--normalize', type=bool, default=True,
                         help="Whether to apply normalization before cosine similarity measurement in the bi-encoder setting")
     parser.add_argument('--fusion_mode', type=str, default='concat',help='the fusion mode for bert feautre (and adapter feature) |add|concat|attentiom')
+    parser.add_argument("--nlist", type=int, default=32,
+                        help="No. of clusters for Faiss")
+    parser.add_argument("--topk", type=int, default=5,
+                        help="The top k results for retrieval")
     # parser.add_argument('--sim_measure', type=str, default='cosine',
     #                     help="Similarity measure, used only when mode = 'bi'. Input one of (cosine, linear_transform)")
     

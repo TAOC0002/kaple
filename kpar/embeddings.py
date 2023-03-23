@@ -15,13 +15,15 @@ class Patent(object):
                  input_ids=None,
                  input_mask=None,
                  segment_ids=None,
-                 ground_truth=None):
+                 ground_truth=None,
+                 predictions=None):
         self.index = index
         self.text = text
         self.input_ids = input_ids
         self.input_mask = input_mask
         self.segment_ids = segment_ids
         self.ground_truth = ground_truth
+        self.predictions = predictions
 
 def convert_to_features(examples, tokenizer, max_seq_length, logger, verbose=False):
     for example_index, example in enumerate(examples):
@@ -71,13 +73,13 @@ def get_embedding(examples, pretrained_model, patent_model):
     embedding = embedding.cpu().detach().numpy().astype('float32')
     return embedding
 
-def compute_embed_pool(corpus_index_file, corpus_content_file, tokenizer, save_dir, pretrained_model, patent_model, max_seq_length=512):
+def compute_embed_pool(corpus_index_file, corpus_content_file, tokenizer, save_dir, pretrained_model, patent_model, logger, max_seq_length=512):
     db_examples = construct_embed_pool(corpus_index_file, corpus_content_file)
     db_features = convert_to_features(db_examples, tokenizer, max_seq_length, logger)
     embedding = get_embedding(db_features, pretrained_model, patent_model)
     return db_examples, embedding
 
-def compute_query_pool(query_file, tokenizer, save_dir, pretrained_model, patent_model, max_seq_length=512):
+def compute_query_pool(query_file, tokenizer, save_dir, pretrained_model, patent_model, logger, max_seq_length=512):
     query_examples = construct_test_pool(query_file)
     query_features = convert_to_features(query_examples, tokenizer, max_seq_length, logger)
     embedding = get_embedding(query_features, pretrained_model, patent_model)

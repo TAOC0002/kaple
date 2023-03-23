@@ -16,6 +16,7 @@ from pytorch_transformers.tokenization_roberta import RobertaTokenizer
 from util import set_seed, PretrainedModel, AdapterModel, patentModel, load_pretrained_adapter, cosine_sim, load_model, sigmoid
 from parser import parse
 from embeddings import compute_embed_pool, compute_query_pool
+from torch.nn.functional import cosine_similarity
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -89,16 +90,60 @@ if __name__ == "__main__":
         np.save(os.join(args.save_dir, 'db_embedding.npy'), embedding)
     
     elif args.function == 'query':
-        db_embeddins = np.load(os.join(args.save_dir, 'db_embedding.npy'), encoding="latin1")
+        db_embeddings = np.load(os.join(args.save_dir, 'db_embedding.npy'), encoding="latin1")
+        with open(os.join(args.save_dir, 'db_examples.pkl'), 'rb') as f:
+            db_examples = pickle.load(f)
         query_examples, embedding = compute_query_pool(args.query_file, tokenizer, args.save_dir, pretrained_model, patent_model, args.max_seq_length)
+        N = embedding.shape[0]
         dim = embedding.shape[1]
-        
-        # with open(os.join(args.save_dir, 'query_examples.pkl'), 'wb') as f:
-        #     pickle.dump(query_examples, f)
-        # np.save(os.join(args.save_dir, 'query_embedding.npy'), embedding)
 
         # faiss
+        nlist = 32
         res = faiss.StandardGpuResources()  # use a single GPU
-        index_flat = faiss.IndexFlatL2(dim)
-        gpu_index_flat = faiss.index_cpu_to_gpu(res, 0, index_flat)
-        gpu_index_flat.add(db_embeddins)
+        quantizer = faiss.IndexFlatL2(dim)  # the other index
+        index_ivf = faiss.IndexIVFFlat(quantizer, dim, nlist, faiss.METRIC_INNER_PRODUCT)
+
+        gpu_index_ivf = faiss.index_cpu_to_gpu(res, 0, index_ivf)
+        assert not gpu_index_ivf.is_trained
+        gpu_index_ivf.train(db_embeddings) 
+        assert gpu_index_ivf.is_trained
+
+        gpu_index_ivf.add(db_embeddings)
+        print(gpu_index_ivf.ntotal)
+        k = 5                         
+        D, I = gpu_index_ivf.search(embedding, k) 
+
+        # refinement
+        embedding = embedding.unsqueeze(dim=1).expand(N, k, dim)
+        for i in range(N):
+            for j in range(k):
+                if j == 0:
+                    res_j = db_embeddings[I[i,j]].unsqueeze(0)
+                else:
+                    res_j = torch.cat([res_j, db_embeddings[I[i,j]].unsqueeze(0)], axis=0)
+            if i == 0:
+                refined_embedding = res_j.unsqueeze(0)
+            else:
+                refined_embedding = torch.cat([refined_embedding, res_j.unsqueeze(0)], axis=0)
+        cosines = cosine_similarity(embedding, refined_embedding, dim=2)
+        sorted, indices = torch.sort(cosines)
+        ranking_tensor = torch.cat(tuple([torch.index_select(I[i], 0, indices[i]).unsqueeze(0) for i in range(10)]), 0) # in terms of numbering
+        ranking_list = [[db_examples[y.item()].index for y in x] for x in ranking_tensor] # in terms of index
+
+        # commpute mrr@k, k = 5
+        # Evaluate on all test data
+        hits = [[i+1 for i, e in enumerate(ranking_list[j]) if e in query_examples[j].ground_truth] for j in range(len(ranking_list))] # [[1, 2], [3], [3], [2], [2, 3], [2, 3]]
+        mrr_score = torch.tensor([1/min(hit) if len(hit) else 0 for hit in hits]).mean().item() # 0.52777
+
+        # compute map
+        # Evaluate on a subset of test data where the no. of ground truths >= 5
+        cutoff = i = 0
+        while cutoff < len(query_examples):
+            if len(query_examples[i].ground_truth) > k:
+                break
+            cutoff += 1
+        map_hits = hits[:cutoff]
+        map_func = lambda y: torch.tensor([torch.tensor([(i+1)/x[i] for i in range(len(x))]).mean() for x in y]).mean().item() # 0.55555
+        map_score = map_func(map_hits)
+        logger.info('MRR@5: {}, MAP@5: {}'.format(mrr_score, map_score))
+        

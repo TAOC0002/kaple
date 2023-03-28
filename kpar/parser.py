@@ -5,6 +5,8 @@ def parse(parser):
                         help="The save dir. Embeddings and indexes will be saved under this directory.")
     parser.add_argument("--function", default=None, type=str, required=True,
                         help="Specify the operation of k-par. Either 'construct_db' or 'query'")
+    parser.add_argument("--model_name_or_path", default='roberta-large', type=str,
+                    help="Path to pre-trained model or shortcut name selected in the list: roberta-large, simcse")
     parser.add_argument("--patent_model_ckpt", default=None, type=str, required=True,
                         help="Path to the patent model checkpoint.")
     parser.add_argument("--pretrained_model_ckpt", default=None, type=str, required=True,
@@ -50,7 +52,7 @@ def parse(parser):
     parser.add_argument('--fusion_mode', type=str, default='concat',help='the fusion mode for bert feautre (and adapter feature) |add|concat|attentiom')
     parser.add_argument("--nlist", type=int, default=32,
                         help="No. of clusters for Faiss")
-    parser.add_argument("--topk", type=int, default=5,
+    parser.add_argument("--topk", type=int, default=10,
                         help="The top k results for retrieval")
     # parser.add_argument('--sim_measure', type=str, default='cosine',
     #                     help="Similarity measure, used only when mode = 'bi'. Input one of (cosine, linear_transform)")

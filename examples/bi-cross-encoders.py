@@ -135,8 +135,8 @@ def main():
         args.train_steps = int(args.num_train_epochs * len(train_examples) // args.train_batch_size)
         num_train_optimization_steps = args.train_steps
 
-    # bicheckpoints = ['./proc_data/roberta_patentsim_compact/cls_pooling_bce_12_epochs/']
-    bicheckpoints = ['./proc_data/roberta_patentmatch/patentmatch_batch-8_lr-5e-06_warmup-0_epoch-6.0_baseline/']
+    bicheckpoints = ['./proc_data/roberta_patentsim_compact/cls_pooling_bce_12_epochs/']
+    # bicheckpoints = ['./proc_data/roberta_patentmatch/patentmatch_batch-8_lr-5e-06_warmup-0_epoch-6.0_baseline/']
     for _cycle in range(1, args.cycles+1):
         logging.info (f"########## cycle {_cycle:.0f} starts ##########")
         logging.info ("Label sentence pairs with bi-encoder...")

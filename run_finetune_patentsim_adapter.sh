@@ -49,7 +49,7 @@ batch=8
 accu=4
 lr=5e-6
 GPU='2'
-CUDA_VISIBLE_DEVICES=$GPU python examples/bi-encoder.py \
+CUDA_VISIBLE_DEVICES=$GPU python examples/run_finetune_simcse_cross_encoder.py \
 --model_type roberta-large \
 --model_name_or_path roberta-large \
 --data_dir data/patent-sim-compact \
@@ -75,12 +75,12 @@ CUDA_VISIBLE_DEVICES=$GPU python examples/bi-encoder.py \
 --fusion_mode='concat' \
 --num_train_epochs 20 \
 --metrics auc \
---comment cls_pooling_bce_20_epochs \
+--comment new_test_embed_size \
 --logging_steps 2000000000 \
---mode bi \
---pooling cls \
---loss bce \
 --overwrite_output_dir \
+# --mode cross \
+# --pooling cls \
+# --loss bce \
 # --no_cuda
 
 # --meta_bertmodel="./proc_data/roberta_patentmatch/patentmatch_batch-8_lr-5e-06_warmup-0_epoch-6.0_concat/pytorch_bertmodel_4400_0.5436605821410952.bin"

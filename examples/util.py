@@ -287,7 +287,7 @@ class PretrainedModel(nn.Module):
         super(PretrainedModel, self).__init__()
         if args.model_name_or_path == 'roberta-large':
             self.model = RobertaModel.from_pretrained("roberta-large", output_hidden_states=True)
-        elif args.model_name_or_path == 'simsce':
+        elif args.model_name_or_path == 'simcse':
             self.model = AutoModel.from_pretrained("princeton-nlp/sup-simcse-roberta-large")
 
         self.config = self.model.config
@@ -296,7 +296,6 @@ class PretrainedModel(nn.Module):
             for p in self.parameters():
                 p.requires_grad = False
 
-
     def forward(self, input_ids, token_type_ids=None, attention_mask=None, labels=None,
                 position_ids=None, head_mask=None):
         outputs = self.model(input_ids=input_ids,
@@ -304,7 +303,7 @@ class PretrainedModel(nn.Module):
                              token_type_ids=token_type_ids,
                              attention_mask=attention_mask,
                              head_mask=head_mask)
-                             # output_hidden_states=True,
+                            #  output_hidden_states=True)
                             #  return_dict=True)
 
         return outputs  # (logits), (pooler_outputs), (hidden_states), (attentions)

@@ -541,7 +541,7 @@ def load_pretrained_adapter(adapter, adapter_path):
     return new_adapter
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(allow_abbrev=False)
 
     ## Required parameters
     parser.add_argument("--data_dir", default=None, type=str, required=True,

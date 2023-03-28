@@ -4,8 +4,8 @@ GPU='0'
 CUDA_VISIBLE_DEVICES=$GPU python examples/bi-cross-encoders.py \
 --model_name_or_path roberta-large \
 --data_dir data/patent-match/ultra-balanced \
---output_dir ./proc_data/roberta_patentmatch \
---output_folder testing-match \
+--output_dir ./proc_data/roberta_patentsim_compact \
+--output_folder mar24 \
 --max_seq_length 512 \
 --eval_steps 120 \
 --per_gpu_train_batch_size $batch \

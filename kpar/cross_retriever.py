@@ -17,7 +17,7 @@ sys.path.append(rootPath)
 from pytorch_transformers.tokenization_roberta import RobertaTokenizer
 from examples.util import set_seed, PretrainedModel, AdapterModel, patentModel, load_pretrained_adapter, cosine_sim, load_model, sigmoid
 from parser import parse
-from embeddings import compute_embed_pool, compute_query_pool
+from embeddings import construct_cross_retriever_data, cross_retriever
 from torch.nn.functional import cosine_similarity
 
 if __name__ == "__main__":
@@ -84,22 +84,31 @@ if __name__ == "__main__":
     pretrained_model.eval()
     patent_model.eval()
 
-    if args.function == 'construct_db':
-        db_examples, embedding = compute_embed_pool(args.corpus_index_file, args.corpus_content_file, tokenizer, args.save_dir, pretrained_model, 
-                           patent_model, logger, device, max_seq_length=args.max_seq_length)
-        with open(os.path.join(args.save_dir, 'db_examples.pkl'), 'wb') as f:
-            pickle.dump(db_examples, f)
-        logger.info('Finished!')
-    
-    elif args.function == 'query':
+    if args.function == 'query':
         st = time.time()
-        
+        k = args.topk
+        query_examples, db_examples, examples = construct_cross_retriever_data(args.query_file, args.corpus_index_file, args.corpus_content_file, tokenizer, logger, max_seq_length=512)
+        num_query = len(query_examples)
+        num_db = len(db_examples)
+        logger.info('Time elapsed in preprocessing: {:.2f} seconds'.format(time.time()-st))
 
-        sorted, indices = torch.sort(cosines)
-        ranking_tensor = torch.cat(tuple([torch.index_select(torch.tensor(I[i]), 0, indices[i]).unsqueeze(0) for i in range(len(query_examples))]), 0) # in terms of numbering
-        ranking_list = [[db_examples[y.item()].index for y in x] for x in ranking_tensor] # in terms of index
-        ranking_list_2 = [[db_examples[y.item()].text for y in x] for x in ranking_tensor] # in terms of index
-        logger.info('Time elapsed in the second stage of retrieval (refinement): {:.2f} seconds'.format(time.time()-st))
+        # st = time.time()
+        # sim_scores = torch.tensor(cross_retriever(examples, num_query, num_db, pretrained_model, patent_model, device, logger), dtype=torch.float)
+        # logger.info('Time elapsed in cross-encoder retrieval: {:.2f} seconds'.format(time.time()-st))
+        # with open(os.path.join(args.save_dir, 'sim_simcse_scores.pkl'), 'wb') as f:
+        #     pickle.dump(sim_scores, f)
+
+        with open(os.path.join(args.save_dir, 'sim_simcse_scores.pkl'), 'rb') as f:
+            sim_scores = pickle.load(f).squeeze(dim=1)
+        cutoff = 0
+        while cutoff < len(query_examples):
+            if len(query_examples[cutoff].ground_truth) < args.topk:
+                break
+            cutoff += 1
+        sorted_scores, indices = torch.sort(sim_scores)
+        indices = indices[:cutoff,:k]
+        ranking_list = [[db_examples[y.item()].index for y in x] for x in indices] # in terms of index
+        ranking_list_2 = [[db_examples[y.item()].text for y in x] for x in indices] # in terms of index
 
         # commpute mrr@k, k = 5
         # Evaluate on all test data
@@ -108,22 +117,19 @@ if __name__ == "__main__":
 
         # compute map
         # Evaluate on a subset of test data where the no. of ground truths >= 5
-        cutoff = i = 0
-        while cutoff < len(query_examples):
-            if len(query_examples[i].ground_truth) > k:
-                break
-            cutoff += 1
+
         is_truth = lambda x, j: 1 if (x in query_examples[j].ground_truth) else 0
         map_hits = [[is_truth(e,j) for i, e in enumerate(ranking_list[j])] for j in range(len(ranking_list))]
-        
+        print(map_hits)
+        hit_ratio = torch.mean(torch.mean(torch.tensor(map_hits, dtype=float), dim=1)).item()
         map_hits = torch.cumsum(torch.tensor(map_hits), dim=1)
         map_func = lambda y: torch.tensor([torch.tensor([x[i]/(i+1) for i in range(len(x))]).mean() for x in y]).mean().item() 
         map_score = map_func(map_hits) # 0.3611
 
-        logger.info('MRR@5: {}, MAP@5: {}'.format(mrr_score, map_score))
+        logger.info('Over {} examples we have Hit ratio: {}, MRR@{}: {}, MAP@{}: {}'.format(cutoff, hit_ratio, args.topk, mrr_score, args.topk, map_score))
         res_file_path = os.path.join(args.save_dir, 'predictions.jsonl')
         logger.info('Saving predictions to {} ...'.format(res_file_path))
-        for i in range(len(query_examples)):
+        for i in range(cutoff):
             query_examples[i].predictions = ranking_list[i]
         results = [{'key': query.index, 'text': query.text, 'ground_truth': query.ground_truth, 'predictions': query.predictions} for query in query_examples]
         res_file = open(res_file_path, "w")

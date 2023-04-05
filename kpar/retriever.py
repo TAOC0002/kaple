@@ -83,14 +83,6 @@ if __name__ == "__main__":
     patent_model = load_model(args.patent_model_ckpt, patent_model)
     pretrained_model.eval()
     patent_model.eval()
-    # print(pretrained_model.embedding.num_embeddings)
-
-    # new_tokens = ['<s>', '</s>']
-    # new_tokens = set(new_tokens) - set(tokenizer.vocab.keys())
-    # tokenizer.add_tokens(list(new_tokens))
-    # print('\n\n\n\n\n', len(list(new_tokens)), '\n\n\n\n\n')
-    # model.resize_token_embeddings(len(tokenizer))
-    
 
     if args.function == 'construct_db':
         db_examples, embedding = compute_embed_pool(args.corpus_index_file, args.corpus_content_file, tokenizer, args.save_dir, pretrained_model, 
@@ -112,49 +104,49 @@ if __name__ == "__main__":
         logger.info('Time elapsed in loading db and constructing query embeddings: {:.2f} seconds'.format(time.time()-st))
 
         ## Use an IVF Index
-        # # faiss
-        # nlist = args.nlist
-        # res = faiss.StandardGpuResources()  # use a single GPU
-        # quantizer = faiss.IndexFlatL2(dim)  # the other index
-        # index_ivf = faiss.IndexIVFFlat(quantizer, dim, nlist, faiss.METRIC_INNER_PRODUCT)
+        # faiss
+        st = time.time()
+        nlist = args.nlist
+        res = faiss.StandardGpuResources()  # use a single GPU
+        quantizer = faiss.IndexFlatL2(dim)  # the other index
+        index_ivf = faiss.IndexIVFFlat(quantizer, dim, nlist, faiss.METRIC_INNER_PRODUCT)
 
-        # gpu_index_ivf = faiss.index_cpu_to_gpu(res, 0, index_ivf)
-        # assert not gpu_index_ivf.is_trained
-        # gpu_index_ivf.train(db_embeddings) 
-        # assert gpu_index_ivf.is_trained
+        gpu_index_ivf = faiss.index_cpu_to_gpu(res, 0, index_ivf)
+        assert not gpu_index_ivf.is_trained
+        gpu_index_ivf.train(db_embeddings) 
+        assert gpu_index_ivf.is_trained
 
-        # gpu_index_ivf.add(db_embeddings)
-        # print(gpu_index_ivf.ntotal)
-        # k = args.topk               
-        # D, I = gpu_index_ivf.search(embedding, k)
-        # logger.info('Time elapsed in the first stage of retrieval (faiss): {:.2f} seconds'.format(time.time()-st))
+        gpu_index_ivf.add(db_embeddings)
+        k = args.topk               
+        D, I = gpu_index_ivf.search(embedding, k)
 
-        # # refinement
-        # st = time.time()
-        # embedding = torch.tensor(embedding).unsqueeze(1).expand(N, k, dim)
-        # for i in range(N):
-        #     for j in range(k):
-        #         if j == 0:
-        #             res_j = torch.tensor(db_embeddings[I[i,j]]).unsqueeze(0)
-        #         else:
-        #             res_j = torch.cat([res_j, torch.tensor(db_embeddings[I[i,j]]).unsqueeze(0)], axis=0)
-        #     if i == 0:
-        #         refined_embedding = res_j.unsqueeze(0)
-        #     else:
-        #         refined_embedding = torch.cat([refined_embedding, res_j.unsqueeze(0)], axis=0)
-        # cosines = cosine_similarity(embedding, refined_embedding, dim=2)
-        # sorted, indices = torch.sort(cosines)
-        # ranking_tensor = torch.cat(tuple([torch.index_select(torch.tensor(I[i]), 0, indices[i]).unsqueeze(0) for i in range(len(query_examples))]), 0) # in terms of numbering
+        # refinement
+        st = time.time()
+        embedding = torch.tensor(embedding).unsqueeze(1).expand(N, k, dim)
+        for i in range(N):
+            for j in range(k):
+                if j == 0:
+                    res_j = torch.tensor(db_embeddings[I[i,j]]).unsqueeze(0)
+                else:
+                    res_j = torch.cat([res_j, torch.tensor(db_embeddings[I[i,j]]).unsqueeze(0)], axis=0)
+            if i == 0:
+                refined_embedding = res_j.unsqueeze(0)
+            else:
+                refined_embedding = torch.cat([refined_embedding, res_j.unsqueeze(0)], axis=0)
+        cosines = cosine_similarity(embedding, refined_embedding, dim=2)
+        sorted, indices = torch.sort(cosines)
+        ranking_tensor = torch.cat(tuple([torch.index_select(torch.tensor(I[i]), 0, indices[i]).unsqueeze(0) for i in range(len(query_examples))]), 0) # in terms of numbering
+        logger.info('Time elapsed for retrieval: {:.2f} seconds'.format(time.time()-st))
 
         ## Using a flat index
-        st = time.time()
-        index_flat = faiss.IndexFlatL2(dim)  # build a flat (CPU) index
-        res = faiss.StandardGpuResources()  # use a single GPU
-        gpu_index_flat = faiss.index_cpu_to_gpu(res, 0, index_flat)
-        k = args.topk
-        gpu_index_flat.add(db_embeddings)         # add vectors to the index
-        D, I = gpu_index_flat.search(embedding, k)  # actual search
-        logger.info('Time elapsed in the second stage of retrieval (refinement): {:.2f} seconds'.format(time.time()-st))
+        # st = time.time()
+        # index_flat = faiss.IndexFlatL2(dim)  # build a flat (CPU) index
+        # res = faiss.StandardGpuResources()  # use a single GPU
+        # gpu_index_flat = faiss.index_cpu_to_gpu(res, 0, index_flat)
+        # k = args.topk
+        # gpu_index_flat.add(db_embeddings)         # add vectors to the index
+        # D, I = gpu_index_flat.search(embedding, k)  # actual search
+        # logger.info('Time elapsed for retrieval: {:.2f} seconds'.format(time.time()-st))
 
         # commpute mrr@k, k = 5
         # compute map
@@ -172,14 +164,15 @@ if __name__ == "__main__":
 
         is_truth = lambda x, j: 1 if (x in query_examples[j].ground_truth) else 0
         map_hits = [[is_truth(e,j) for i, e in enumerate(ranking_list[j])] for j in range(len(ranking_list))]
+        hit_ratio = torch.mean(torch.mean(torch.tensor(map_hits, dtype=float), dim=1)).item()
         map_hits = torch.cumsum(torch.tensor(map_hits), dim=1)
         map_func = lambda y: torch.tensor([torch.tensor([x[i]/(i+1) for i in range(len(x))]).mean() for x in y]).mean().item() 
         map_score = map_func(map_hits) # 0.3611
 
-        logger.info('MRR@{}: {}, MAP@{}: {}'.format(args.topk, mrr_score, args.topk, map_score))
+        logger.info('Hit ratio: {}, MRR@{}: {}, MAP@{}: {}'.format(hit_ratio, args.topk, mrr_score, args.topk, map_score))
         res_file_path = os.path.join(args.save_dir, 'predictions.jsonl')
         logger.info('Saving predictions to {} ...'.format(res_file_path))
-        for i in range(len(query_examples)):
+        for i in range(cutoff):
             query_examples[i].predictions = ranking_list[i]
         results = [{'key': query.index, 'text': query.text, 'ground_truth': query.ground_truth, 'predictions': query.predictions} for query in query_examples]
         res_file = open(res_file_path, "w")

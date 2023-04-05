@@ -963,7 +963,7 @@ def main():
                         with torch.no_grad():
                             pretrained_model_outputs = pretrained_model(input_ids=input_ids, token_type_ids=segment_ids,
                                                   attention_mask=input_mask, labels=label_ids)
-                            tmp_eval_loss, logits = patent_model(pretrained_model_outputs, input_ids=input_ids, token_type_ids=segment_ids, attention_mask=input_mask, labels=label_ids)
+                            tmp_eval_loss, logits, fac_outputs = patent_model(pretrained_model_outputs, input_ids=input_ids, token_type_ids=segment_ids, attention_mask=input_mask, labels=label_ids)
 
                         logits = logits.detach().cpu().numpy()
                         label_ids = label_ids.to('cpu').numpy()

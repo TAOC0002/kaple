@@ -1,23 +1,36 @@
-# K-Adapter: Infusing Knowledge into Pre-Trained Models with Adapters
-This repository is the official implementation of the paper "K-Adapter: Infusing Knowledge into Pre-Trained Models with Adapters", ACL-IJCNLP 2021 Findings.
+# KAPLE: a Knowledgeable Aadapter-based model for Pre-trained Language Embedding
+This repository contains the codes and data of a final year project titled "Enhance graph-based document retrieval with external knowledge". The research was conducted in the School of Electrical and Electronic Engineering at Nanyang Technological University under the supervision of [A/P Chen Li-Hui](https://dr.ntu.edu.sg/cris/rp/rp00969).
 
-In the K-adapter paper, we present a flexible approach that supports continual knowledge infusion into large pre-trained models (e.g. RoBERTa in this work).
-We infuse factual knowledge and linguistic knowledge, and show that adapters for both kinds of knowledge work well on downstream tasks.
+In this study, we start from a recent paper "K-Adapter: Infusing Knowledge into Pre-Trained Models with Adapters", that supports continual knowledge infusion into language models. Novel adjustments such as joint optimization, contrastive learning and knowledge distillation are combined to further improve the model's performance on sentence-pair modeling tasks (e.g. NLI). We extend our work to patent document retrieval, and show that our new adaptation of K-Adapter work well on retrieval tasks.
 
-For more details, please check the latest version of the paper: [https://arxiv.org/abs/2002.01808](https://arxiv.org/abs/2002.01808)
+## Software Environment
+- Python 3.9.13
+- Conda 22.9.0
+- Cuda 11.2
+- Git 2.17.1
+- GPU version: GeForce RTX 3090
 
-## Prerequisites 
-- Python 3.6
-- PyTorch 1.3.1
-- tensorboardX
-- transformers
+## Required Packages
+- info-nce-pytorch 0.1.4
+- scikit-learn 0.24.2
+- huggingface-hub 0.4.0
+- transformers 4.18.0
+- sentencepiece 0.1.97
+- sqlalchemy 1.3.13
+- sqlite 1.30.2
+- torchvision 0.9.0+cu111
+- torch 1.3.1
+- pandas 1.1.5
+- numpy 1.16.2
+- faiss 1.7.0
+- tensorflow 2.6.2
 
-We use huggingface/transformers framework, the environment can be installed with:
+The environment can be installed via conda:
 ```bash
-conda create -n kadapter python=3.6
+conda create -n kaple python=3.9
 ```
 ```bash
-pip install -r requirements.txt
+conda install -r requirements.txt
 ```
 
 ## Pre-training Adapters

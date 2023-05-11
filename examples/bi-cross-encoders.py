@@ -67,7 +67,7 @@ def main():
     # Instantiate tokenizers and base models
     if args.model_name_or_path == 'roberta-large':
         tokenizer = RobertaTokenizer.from_pretrained('roberta-large')
-    elif args.model_name_or_path == 'simsce':
+    elif args.model_name_or_path == 'simcse':
         tokenizer = AutoTokenizer.from_pretrained("princeton-nlp/sup-simcse-roberta-large")
     pretrained_model = PretrainedModel(args)
     if args.meta_fac_adaptermodel:

@@ -292,6 +292,7 @@ class PretrainedModel(nn.Module):
 
         self.config = self.model.config
         self.config.freeze_adapter = args.freeze_adapter
+        self.config.output_hidden_states=True
         if args.freeze_bert:
             for p in self.parameters():
                 p.requires_grad = False
@@ -376,6 +377,7 @@ class AdapterModel(nn.Module):
 
     def forward(self, pretrained_model_outputs):
         outputs = pretrained_model_outputs
+        print
         sequence_output = outputs[0]
         # pooler_output = outputs[1]
         hidden_states = outputs[2]

@@ -180,7 +180,7 @@ def main():
     
     if args.model_name_or_path == 'roberta-large':
         tokenizer = RobertaTokenizer.from_pretrained('roberta-large')
-    elif args.model_name_or_path == 'simsce':
+    elif args.model_name_or_path == 'simcse':
         tokenizer = AutoTokenizer.from_pretrained("princeton-nlp/sup-simcse-roberta-large")
     # special_tokens_dict = {'cls_token': '<cls>', 'start_token':'<s>', 'sep_token':'</s>'}
     # tokenizer.add_special_tokens(special_tokens_dict)

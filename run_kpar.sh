@@ -1,6 +1,6 @@
 GPU='0'
 CUDA_VISIBLE_DEVICES=$GPU python kpar/retriever.py \
---save_dir kpar/march26 \
+--save_dir kpar/demo \
 --function query \
 --topk 5 \
 --patent_model_ckpt proc_data/roberta_patentsim_compact/cls_pooling_bce_12_epochs/pytorch_model_best.bin \

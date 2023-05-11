@@ -105,48 +105,48 @@ if __name__ == "__main__":
 
         ## Use an IVF Index
         # faiss
-        st = time.time()
-        nlist = args.nlist
-        res = faiss.StandardGpuResources()  # use a single GPU
-        quantizer = faiss.IndexFlatL2(dim)  # the other index
-        index_ivf = faiss.IndexIVFFlat(quantizer, dim, nlist, faiss.METRIC_INNER_PRODUCT)
+        # st = time.time()
+        # nlist = args.nlist
+        # res = faiss.StandardGpuResources()  # use a single GPU
+        # quantizer = faiss.IndexFlatL2(dim)  # the other index
+        # index_ivf = faiss.IndexIVFFlat(quantizer, dim, nlist, faiss.METRIC_INNER_PRODUCT)
 
-        gpu_index_ivf = faiss.index_cpu_to_gpu(res, 0, index_ivf)
-        assert not gpu_index_ivf.is_trained
-        gpu_index_ivf.train(db_embeddings) 
-        assert gpu_index_ivf.is_trained
+        # gpu_index_ivf = faiss.index_cpu_to_gpu(res, 0, index_ivf)
+        # assert not gpu_index_ivf.is_trained
+        # gpu_index_ivf.train(db_embeddings) 
+        # assert gpu_index_ivf.is_trained
 
-        gpu_index_ivf.add(db_embeddings)
-        k = args.topk               
-        D, I = gpu_index_ivf.search(embedding, k)
+        # gpu_index_ivf.add(db_embeddings)
+        # k = args.topk               
+        # D, I = gpu_index_ivf.search(embedding, k)
 
-        # refinement
-        st = time.time()
-        embedding = torch.tensor(embedding).unsqueeze(1).expand(N, k, dim)
-        for i in range(N):
-            for j in range(k):
-                if j == 0:
-                    res_j = torch.tensor(db_embeddings[I[i,j]]).unsqueeze(0)
-                else:
-                    res_j = torch.cat([res_j, torch.tensor(db_embeddings[I[i,j]]).unsqueeze(0)], axis=0)
-            if i == 0:
-                refined_embedding = res_j.unsqueeze(0)
-            else:
-                refined_embedding = torch.cat([refined_embedding, res_j.unsqueeze(0)], axis=0)
-        cosines = cosine_similarity(embedding, refined_embedding, dim=2)
-        sorted, indices = torch.sort(cosines)
-        ranking_tensor = torch.cat(tuple([torch.index_select(torch.tensor(I[i]), 0, indices[i]).unsqueeze(0) for i in range(len(query_examples))]), 0) # in terms of numbering
-        logger.info('Time elapsed for retrieval: {:.2f} seconds'.format(time.time()-st))
+        # # refinement
+        # st = time.time()
+        # embedding = torch.tensor(embedding).unsqueeze(1).expand(N, k, dim)
+        # for i in range(N):
+        #     for j in range(k):
+        #         if j == 0:
+        #             res_j = torch.tensor(db_embeddings[I[i,j]]).unsqueeze(0)
+        #         else:
+        #             res_j = torch.cat([res_j, torch.tensor(db_embeddings[I[i,j]]).unsqueeze(0)], axis=0)
+        #     if i == 0:
+        #         refined_embedding = res_j.unsqueeze(0)
+        #     else:
+        #         refined_embedding = torch.cat([refined_embedding, res_j.unsqueeze(0)], axis=0)
+        # cosines = cosine_similarity(embedding, refined_embedding, dim=2)
+        # sorted, indices = torch.sort(cosines)
+        # ranking_tensor = torch.cat(tuple([torch.index_select(torch.tensor(I[i]), 0, indices[i]).unsqueeze(0) for i in range(len(query_examples))]), 0) # in terms of numbering
+        # logger.info('Time elapsed for retrieval: {:.2f} seconds'.format(time.time()-st))
 
         ## Using a flat index
-        # st = time.time()
-        # index_flat = faiss.IndexFlatL2(dim)  # build a flat (CPU) index
-        # res = faiss.StandardGpuResources()  # use a single GPU
-        # gpu_index_flat = faiss.index_cpu_to_gpu(res, 0, index_flat)
-        # k = args.topk
-        # gpu_index_flat.add(db_embeddings)         # add vectors to the index
-        # D, I = gpu_index_flat.search(embedding, k)  # actual search
-        # logger.info('Time elapsed for retrieval: {:.2f} seconds'.format(time.time()-st))
+        st = time.time()
+        index_flat = faiss.IndexFlatL2(dim)  # build a flat (CPU) index
+        res = faiss.StandardGpuResources()  # use a single GPU
+        gpu_index_flat = faiss.index_cpu_to_gpu(res, 0, index_flat)
+        k = args.topk
+        gpu_index_flat.add(db_embeddings)         # add vectors to the index
+        D, I = gpu_index_flat.search(embedding, k)  # actual search
+        logger.info('Time elapsed for retrieval: {:.2f} seconds'.format(time.time()-st))
 
         # commpute mrr@k, k = 5
         # compute map

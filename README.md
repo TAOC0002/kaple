@@ -33,8 +33,9 @@ conda create -n kaple python=3.9
 conda install -r requirements.txt
 ```
 
-## Pre-training Adapters
-In the pre-training procedure, we train each knowledge-specific adapter on different pre-training tasks individually. 
+## Data Preparation and Preprocessing
+For patent pair modeling, two datasets are inspected in this project. We suggest using the Patent Similarity Search dataset () to reproduce all experiments, as it shows noticeable changes in our evaluation metric of choice and therefore more suitable for ablation studies. The other dataset is the Patch Match dataset, which is considered a more challenging dataset and the performance might not show significant difference with our system.
+
 ### 1. Process Dataset
 - `./scripts/clean_T_REx.py`: clean [raw T-Rex dataset](https://hadyelsahar.github.io/t-rex/downloads/) (32G), and save the cleaned T-Rex to JSON format
 - `./scripts/create_subdataset-relation-classification.ipynb`: create the dataset from T-REx for pre-training factual adapter on relation classification task. This sub-dataset can be found [here](https://drive.google.com/drive/folders/1xRGmIUXwPrtnsksQ1GY8YAE87gf7Ct6E?usp=sharing).

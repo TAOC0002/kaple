@@ -68,3 +68,5 @@ CUDA_VISIBLE_DEVICES=$GPU python examples/bi-encoder.py \
 --mode bi \
 --pooling cls \
 --loss mse \
+--overwrite_output_dir \
+--no_cuda

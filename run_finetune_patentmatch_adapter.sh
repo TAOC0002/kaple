@@ -40,7 +40,7 @@ batch=8
 accu=4
 lr=5e-5
 GPU='3'
-CUDA_VISIBLE_DEVICES=$GPU python examples/bi-encoder.py \
+CUDA_VISIBLE_DEVICES=$GPU python examples/kaple.py \
 --model_name_or_path roberta-large \
 --data_dir data/patent-match/ultra-balanced \
 --preprocess_type read_examples_origin \

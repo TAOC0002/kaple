@@ -49,7 +49,7 @@ batch=8
 accu=4
 lr=5e-6
 GPU='0'
-CUDA_VISIBLE_DEVICES=$GPU python examples/bi-encoder.py \
+CUDA_VISIBLE_DEVICES=$GPU python examples/kaple.py \
 --model_name_or_path simcse \
 --data_dir data/patent-sim-compact \
 --preprocess_type read_examples_origin \

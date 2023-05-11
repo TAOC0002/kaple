@@ -1,7 +1,7 @@
 batch=8
 lr=5e-6
 GPU='0'
-CUDA_VISIBLE_DEVICES=$GPU python examples/bi-cross-encoders.py \
+CUDA_VISIBLE_DEVICES=$GPU python examples/self-distillation.py \
 --model_name_or_path roberta-large \
 --data_dir data/patent-match/ultra-balanced \
 --output_dir ./proc_data/roberta_patentsim_compact \

@@ -39,7 +39,8 @@ For patent pair modeling, two datasets are inspected in this project. We suggest
 - The PatentMatch dataset is downloadable through [here](https://hpi.de/naumann/projects/web-science/paar-patent-analysis-and-retrieval/patentmatch.html). We select the ultra-balanced version where the number of novelty-destroying and non novelty-destroying patent pairs and balanced.
 
 ## Patent Pair Modeling
-...
+The task is to calculate the full text similarity given two patent documents. By identifying the degree of correspondence between a patent application and all prior art in the database, patent pair modeling can be extended to prior art retrieval in the next section.
+
 ### 1. Joint Optimization of Multiple Loss Functions
 To conduct the experiment, run `examples/kaple.py` through a bash script like `run_pretrain_fac-adapter.sh` and execute as such:
 ```bash
@@ -50,9 +51,9 @@ Try changing the arguments and inspect how they result in model performance. See
 python examples/kaple.py -h
 ```
 ### 2. Self-Distillation of Encoders
-To conduct the experiment, run `examples/self-distillation.py` through a bash script like `run_pretrain_fac-adapter.sh` and execute as such:
+To conduct the experiment, run `examples/self-distillation.py` through a bash script like `run_distillation.sh` and execute as such:
 ```bash
-bash run_pretrain_fac-adapter.sh
+bash run_distillation.sh
 ```
 Similarly, customizable arguments are available via
 ```bash
@@ -60,17 +61,14 @@ python examples/self-distillation.py -h
 ```
 
 ## Patent Prior Art Retrieval
-...
+In many patent offices, patent officers compare patent applications with all related patents from the past to determine whether the invention is patentable. Currently, this prior art retrieval process is done manually with technical aid limited to exact keyword matching. However, there are many caveats, such as the negligence of synonyms and language semantics. Automating prior art retrieval with a retriever can significantly reduce the tediousness of searching through the patents database by humans. In this section, we will convert the model previously trained on patent pairs into a prior art retriever.
 
-**(1) run the pipeline**
+Run the `kpar/retriever.py` program through
 ```bash
-bash run_finetune_cosmosqa_adapter.sh
+bash run_kpar.sh
 ```
-
-**(2) result**
-
-
-
-**(3) Data format**
-
-
+**(1) Construct the prior art embedding pool**
+Set `function` to `construct_db` to compute the embeddings for all prior art and store them on disk.
+**(2) Query and similarity search**
+Set `function` to `query`.
+Given a new patent application, first compute its embedding, then compare it against the entire database of prior art embeddings. The program returns the top n most relevant prior art having the smallest euclidean distances from the query patent in the embedding space.

@@ -69,6 +69,7 @@ bash run_kpar.sh
 ```
 **(1) Construct the prior art embedding pool**
 Set `function` to `construct_db` to compute the embeddings for all prior art and store them on disk.
+
 **(2) Query and similarity search**
 Set `function` to `query`.
 Given a new patent application, first compute its embedding, then compare it against the entire database of prior art embeddings. The program returns the top n most relevant prior art having the smallest euclidean distances from the query patent in the embedding space.

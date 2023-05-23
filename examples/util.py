@@ -334,7 +334,7 @@ class AdapterModel(nn.Module):
         class AdapterConfig:
             project_hidden_size: int = self.config.hidden_size
             hidden_act: str = "gelu"
-            adapter_size: int = self.adapter_size  # 64
+            adapter_size: int = self.adapter_size  # 768
             adapter_initializer_range: float = 0.0002
             is_decoder: bool = False
             attention_probs_dropout_prob: float= 0.1
@@ -377,7 +377,6 @@ class AdapterModel(nn.Module):
 
     def forward(self, pretrained_model_outputs):
         outputs = pretrained_model_outputs
-        print
         sequence_output = outputs[0]
         # pooler_output = outputs[1]
         hidden_states = outputs[2]
@@ -459,6 +458,7 @@ class patentModel(nn.Module):
         self.loss = loss
 
     def forward(self, pretrained_model_outputs, labels=None, pseudo_labels=None, pseudo_fac_labels=None, labelling=False):
+        fac_adapter_outputs = torch.rand(8,50,20)
         pretrained_model_last_hidden_states = pretrained_model_outputs[0]
         if self.fac_adapter is not None:
             fac_adapter_outputs, _ = self.fac_adapter(pretrained_model_outputs)
@@ -503,6 +503,8 @@ class patentModel(nn.Module):
             sequence_output = self.dropout(fac_features)
         elif self.lin_adapter is not None:
             sequence_output = self.dropout(lin_features)
+        else:
+            sequence_output = combine_features
 
         if labels is not None or pseudo_labels is not None or labelling:
             if self.loss == "bce":

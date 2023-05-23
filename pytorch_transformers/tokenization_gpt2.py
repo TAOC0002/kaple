@@ -193,11 +193,15 @@ class GPT2Tokenizer(PreTrainedTokenizer):
         """Converts an index (integer) in a token (string/unicode) using the vocab."""
         return self.decoder.get(index)
 
-    def convert_tokens_to_string(self, tokens):
+    def convert_tokens_to_string(self, tokens, listlike=False):
         """ Converts a sequence of tokens (string) in a single string. """
-        text = ''.join(tokens)
-        text = bytearray([self.byte_decoder[c] for c in text]).decode('utf-8', errors=self.errors)
-        return text
+        if not listlike:
+            text = ''.join(tokens)
+            text = bytearray([self.byte_decoder[c] for c in text]).decode('utf-8', errors=self.errors)
+            return text
+        else:
+            tokens = [bytearray([self.byte_decoder[c] for c in token]).decode('utf-8', errors=self.errors) for token in tokens]
+            return tokens
 
     def save_vocabulary(self, save_directory):
         """Save the tokenizer vocabulary and merge files to a directory."""

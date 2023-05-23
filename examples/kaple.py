@@ -114,7 +114,7 @@ def main():
                         help="Either one of cross-encoder (cross) or bi-coder (bi)")
     parser.add_argument('--normalize', type=bool, default=True,
                         help="Whether to apply normalization before cosine similarity measurement in the bi-encoder setting")
-    parser.add_argument('--pooling', type=str, default='mean',
+    parser.add_argument('--pooling', type=str, default='cls',
                         help="Pooling scheme. Input one of (mean, cls)")
     parser.add_argument('--loss', type=str, default='bce',
                         help="Loss function. Input one of (bce, infonce, mse)")
@@ -434,11 +434,15 @@ def main():
                 
                 if args.sim_measure == "cosine":
                     cosines = cosine_sim(prior_vectors, claim_vectors, args.normalize, device) # -> (bz, 1)
-                    fac_cosines = cosine_sim(prior_fac_vectors, claim_fac_vectors, args.normalize, device)  
+                    if args.meta_fac_adaptermodel:
+                        fac_cosines = cosine_sim(prior_fac_vectors, claim_fac_vectors, args.normalize, device)  
 
                 labels = label_ids.unsqueeze(dim=1)
                 if args.loss == "bce":
-                    loss = loss_fct(sigmoid(cosines), labels) + loss_fct(sigmoid(fac_cosines), labels)
+                    if args.meta_fac_adaptermodel:
+                        loss = loss_fct(sigmoid(cosines), labels) + loss_fct(sigmoid(fac_cosines), labels)
+                    else:
+                        loss = loss_fct(sigmoid(cosines), labels)
                 elif args.loss == "infonce":
                     loss = infonce(prior_vectors, claim_vectors, prior_fac_vectors, claim_fac_vectors, labels)
                 elif args.loss == "mse":
@@ -603,17 +607,19 @@ def main():
                                     claim_vectors = claim_output_logits[:,0,:]
                                     prior_fac_vectors = prior_fac_logits[:,0,:]
                                     claim_fac_vectors = claim_fac_logits[:,0,:]
-                                
+
                                 if args.sim_measure == "cosine":
                                     cosines = cosine_sim(prior_vectors, claim_vectors, args.normalize, device) # -> (bz, 1)
-                                    fac_cosines = cosine_sim(prior_fac_vectors, claim_fac_vectors, args.normalize, device)
-                            
+                                    if args.meta_fac_adaptermodel:
+                                        fac_cosines = cosine_sim(prior_fac_vectors, claim_fac_vectors, args.normalize, device)  
 
-                                # loss = loss_fct(cosines, label_ids.unsqueeze(dim=1)) + loss_fct(fac_cosines, label_ids.unsqueeze(dim=1))
-                                labels = label_ids.unsqueeze(dim=1) # -> (bz, 1)
+                                labels = label_ids.unsqueeze(dim=1)
 
                                 if args.loss == "bce":
-                                    loss = loss_fct(sigmoid(cosines), labels) + loss_fct(sigmoid(fac_cosines), labels)
+                                    if args.meta_fac_adaptermodel:
+                                        loss = loss_fct(sigmoid(cosines), labels) + loss_fct(sigmoid(fac_cosines), labels)
+                                    else:
+                                        loss = loss_fct(sigmoid(cosines), labels)
                                 elif args.loss == "infonce":
                                     loss = infonce(prior_vectors, claim_vectors, prior_fac_vectors, claim_fac_vectors, labels)
                                 elif args.loss == "mse":

@@ -136,6 +136,13 @@ def eda():
     print(data.shape)
     print(sum(data['label']))
 
+def temp(indices):
+    corpus_abstract = np.load('corpus_abstract.npy', encoding="latin1", allow_pickle=True).item()
+    for index in indices:
+        print('*************** index', index, '***************')
+        print(corpus_abstract[index])
+        print()
+
 def kpar_test_set_construction(size):
     # inverse dictionary
     corpus_abstract = np.load('corpus_abstract.npy', encoding="latin1", allow_pickle=True).item()
@@ -180,4 +187,6 @@ if __name__ == "__main__":
     # collate_examples()
     # check_json_format('valid.jsonl')
     # eda()
-    kpar_test_set_construction(size=100)
+    # kpar_test_set_construction(size=100)
+    indices = ['US6629951', 'US6083255']
+    temp(indices)

@@ -9,6 +9,7 @@ curPath = os.path.abspath(os.path.dirname(__file__))
 rootPath = os.path.split(os.path.split(curPath)[0])[0]
 sys.path.append(rootPath)
 from pytorch_transformers.tokenization_roberta import RobertaTokenizer
+from torch.utils.data import TensorDataset
 
 orig_filenames = {'train':'CDR_TrainingSet.PubTator.txt', 
                   'test':'CDR_TestSet.PubTator.txt', 
@@ -162,10 +163,11 @@ def convert_examples_to_features(input_file, tokenizer, max_seq_length, verbose=
     return features
     
 
-def load_and_cache_features(args, logger, dataset_type, tokenizer, max_seq_length):
+def load_and_cache_features(args, logger, dataset_type, tokenizer):
     '''
     Dataset mode being one of 'train', 'dev', or 'test'.
     '''
+    max_seq_length = args.max_seq_length
     cached_features_file = os.path.join(curPath, 'cached_{}_features'.format(dataset_type))
     if os.path.exists(cached_features_file):
         logger.info("Loading features from cached file %s", cached_features_file)
@@ -184,16 +186,9 @@ def load_and_cache_features(args, logger, dataset_type, tokenizer, max_seq_lengt
     all_input_ids = torch.tensor([f.input_ids for f in features], dtype=torch.long)
     all_input_mask = torch.tensor([f.input_mask for f in features], dtype=torch.long)
     all_segment_ids = torch.tensor([f.segment_ids for f in features], dtype=torch.long)
-    if output_mode == "classification":
-        all_label_ids = torch.tensor([f.label_id for f in features], dtype=torch.long)
-    elif output_mode == "regression":
-        all_label_ids = torch.tensor([f.label_id for f in features], dtype=torch.float)
-    all_subj_special_start_ids = torch.tensor([f.subj_special_start_id for f in features], dtype=torch.float)
-    all_obj_special_start_ids = torch.tensor([f.obj_special_start_id for f in features], dtype=torch.float)
+    all_label_ids = torch.tensor([f.labels for f in features], dtype=torch.long)
 
-    dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids, all_subj_special_start_ids,
-                            all_obj_special_start_ids)
-    # dataset = ConcatDataset([])
+    dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids)
     return dataset
                                                        
 # if __name__ == "__main__":

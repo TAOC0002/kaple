@@ -602,14 +602,16 @@ def reconstruct(prior, claim, labels, bz):
 
     return positive, negative
 
-def infonce(prior_vectors, claim_vectors, prior_fac_vectors, claim_fac_vectors, labels):
+def infonce(prior_vectors, claim_vectors, labels, prior_fac_vectors=None, claim_fac_vectors=None):
     if len(labels.shape) != 2:
         labels = labels.unsqueeze(1)
     bz = prior_vectors.shape[0]
     loss_fct = InfoNCE(negative_mode='paired')
     pos, neg = reconstruct(prior_vectors, claim_vectors, labels, bz)
-    fac_pos, fac_neg = reconstruct(prior_fac_vectors, claim_fac_vectors, labels, bz)
-    loss = loss_fct(prior_vectors, pos, neg) + loss_fct(prior_fac_vectors, fac_pos, fac_neg)
+    loss = loss_fct(prior_vectors, pos, neg)
+    if prior_fac_vectors is not None and claim_fac_vectors is not None:
+        fac_pos, fac_neg = reconstruct(prior_fac_vectors, claim_fac_vectors, labels, bz)
+        loss += loss_fct(prior_fac_vectors, fac_pos, fac_neg)
     return loss
 
 def load_model(model_path, model):

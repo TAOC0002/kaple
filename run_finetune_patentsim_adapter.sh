@@ -49,16 +49,20 @@ CUDA_VISIBLE_DEVICES=$GPU python examples/kaple.py \
 --adapter_size 768 \
 --adapter_list "0,11,22" \
 --adapter_skip_layers 0 \
---meta_fac_adaptermodel="./proc_data/adapter_pretraining/ddi-128/best-checkpoint/pytorch_model.bin" \
---meta_lin_adaptermodel="" \
+--meta_fac_adaptermodel="./proc_data/adapter_pretraining/cdr-64/best-checkpoint/pytorch_model.bin" \
+--meta_lin_adaptermodel="./proc_data/adapter_pretraining/ddi/best-checkpoint/pytorch_model.bin" \
+--meta_bertmodel="./proc_data/roberta_patentsim_compact/cdr-ddi-test/pytorch_bertmodel_best.bin" \
+--meta_patentmodel="./proc_data/roberta_patentsim_compact/cdr-ddi-test/pytorch_model_best.bin" \
 --fusion_mode='concat' \
 --num_train_epochs 30 \
 --metrics auc \
---comment ddi-test \
+--comment cdr-ddi-test \
 --overwrite_output_dir \
 --mode bi \
 --pooling cls \
---loss bce 
+--loss bce \
+--do_test
 
 
 # --meta_bertmodel="./proc_data/roberta_patentmatch/patentmatch_batch-8_lr-5e-06_warmup-0_epoch-6.0_concat/pytorch_bertmodel_4400_0.5436605821410952.bin"
+# "./pretrained_models/lin-adapter/pytorch_model.bin"

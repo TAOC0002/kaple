@@ -29,6 +29,20 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+def tokens_to_ids(tokenizer, tokens, max_seq_length):
+    segment_ids = [0] * len(tokens)
+    input_ids = tokenizer.convert_tokens_to_ids(tokens)
+    input_mask = [1] * len(input_ids)
+    padding_length = max_seq_length - len(input_ids)
+    input_ids =  input_ids + ([0] * padding_length)
+    input_mask =  input_mask + ([0] * padding_length)
+    segment_ids =  segment_ids + ([0] * padding_length)
+
+    assert len(input_ids) == max_seq_length
+    assert len(input_mask) == max_seq_length
+    assert len(segment_ids) == max_seq_length
+    return input_ids, input_mask, segment_ids
+
 
 class InputExample(object):
     """A single training/test example for simple sequence classification."""
@@ -79,6 +93,20 @@ class trex_etInputFeatures(object):
         self.segment_ids = segment_ids
         self.label_id = label_id
         self.subj_special_start_id = subj_special_start_id
+
+class nerInputFeatures(object):
+    def __init__(self,
+                 docid,
+                 input_ids,
+                 input_mask,
+                 segment_ids,
+                 labels
+                 ):
+        self.docid = docid
+        self.input_ids = input_ids
+        self.input_mask = input_mask
+        self.segment_ids = segment_ids
+        self.labels = labels
 
 
 class DataProcessor(object):
@@ -169,6 +197,7 @@ class FindHeadProcessor(DataProcessor):
             examples.append(
                 FindHeadInputExample(guid=guid, text_a=text_a, text_b=text_b))
         return examples
+    
 def convert_examples_to_features_find_head(examples, max_seq_length,
                                                    tokenizer, output_mode,
                                                    cls_token_at_end=False,
@@ -712,6 +741,58 @@ def convert_examples_to_features_ddi(examples, label_list, max_seq_length,
     return features
 
 
+cdr_relations = ['O', 'B-chem', 'I-chem', 'B-dis', 'I-dis']
+
+class CDRProcessor(DataProcessor):
+    def get_labels(self):
+        """See base class."""
+        # return ["0", "1"]
+        return cdr_relations
+
+
+def convert_examples_to_features_cdr(file_dir, tokenizer, max_seq_length, verbose=False):
+    from data.cdr.util_data import ners
+    features = []
+    # file_dir = os.path.join(os.path.split(os.path.dirname(os.path.realpath(__file__)))[0], 'data/cdr/'+input_file)
+
+    with open(file_dir) as f:
+        data = json.load(f)
+        for line in data:        
+            docid = line['docid']
+            tokens = ['<s>'] + line['tokens'][:max_seq_length-2] + ['</s>']  # <s> is the bos token and </s> is the eos token in roberta
+            labels = [-100] + [ners[label] for label in line['labels'][:max_seq_length-2]]
+            padding_length = max_seq_length - len(labels)
+            for padding in range(padding_length):
+                labels.append(-100)
+            input_ids, input_mask, segment_ids=tokens_to_ids(tokenizer, tokens, max_seq_length)
+
+            assert len(input_ids) == max_seq_length
+            assert len(input_mask) == max_seq_length
+            assert len(segment_ids) == max_seq_length
+            assert len(labels) == max_seq_length
+
+            features.append(
+                nerInputFeatures(
+                    docid=docid,
+                    input_ids=input_ids,
+                    input_mask=input_mask,
+                    segment_ids=segment_ids,
+                    labels=labels
+                )
+            )
+    if verbose:
+        for i in range(3):
+            print(features[i].docid)
+            print(features[i].input_ids)
+            print([tokenizer.convert_tokens_to_string(tokenizer._convert_id_to_token(id)) for id in features[i].input_ids])
+            print(features[i].input_mask)
+            print(features[i].segment_ids)
+            print(features[i].labels)
+            print()
+    return features
+    
+
+
 trex_relations_et = ['Q6465', 'Q4022', 'Q10742', 'Q15416', 'Q920182', 'Q1115575', 'Q169358', 'Q1344', 'Q1616075',
                      'Q8076', 'Q70208', 'Q11315', 'Q55488', 'Q482994', 'Q46831', 'Q7889', 'Q209939', 'Q622521',
                      'Q11303', 'Q1867183', 'Q532', 'Q18127', 'Q174989', 'Q131681', 'Q1077817', 'Q7278', 'Q2658935',
@@ -837,14 +918,16 @@ processors = {
     "trex": TREXProcessor,
     "trex_entity_typing": TREXProcessor_et,
     "find_head": FindHeadProcessor,
-    "ddi":DDIProcessor
+    "ddi":DDIProcessor,
+    "cdr":CDRProcessor
 }
 
 output_modes = {
     "trex": "classification",
     "trex_entity_typing": "classification",
     "find_head":"classification",
-    "ddi":"classification"
+    "ddi":"classification",
+    "cdr":"classification"
 }
 
 GLUE_TASKS_NUM_LABELS = {

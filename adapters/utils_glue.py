@@ -604,18 +604,18 @@ def convert_examples_to_features_trex(examples, label_list, max_seq_length,
     return features
 
 
-ddi_relations = ['DDI-false', 'DDI-advise', 'DDI-effect', 'DDI-int', 'DDI-mechanism']
+ddi_relations = ['0', '1', '2', '3', '4']
 
 class DDIProcessor(DataProcessor):
     def get_train_examples(self, data_dir, dataset_type, negative_sample):
         """See base class."""
         return self._create_examples(
-            self._read_tsv(os.path.join(data_dir, "{}.tsv".format(dataset_type))), dataset_type, negative_sample)
+            self._read_tsv(os.path.join(data_dir, "new-{}.tsv".format(dataset_type))), dataset_type, negative_sample)
 
     def get_dev_examples(self, data_dir, dataset_type, negative_sample):
         """See base class."""
         return self._create_examples(
-            self._read_tsv(os.path.join(data_dir, "{}.tsv".format(dataset_type))), dataset_type, negative_sample)
+            self._read_tsv(os.path.join(data_dir, "new-{}.tsv".format(dataset_type))), dataset_type, negative_sample)
 
     def get_labels(self):
         """See base class."""

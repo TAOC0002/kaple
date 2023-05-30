@@ -412,7 +412,7 @@ class AdapterModel(nn.Module):
 
 
 class patentModel(nn.Module):
-    def __init__(self, args, pretrained_model_config, fac_adapter, et_adapter, lin_adapter, max_seq_length, pooling="cls", loss="bce"):
+    def __init__(self, args, pretrained_model_config, fac_adapter, lin_adapter, et_adapter, max_seq_length, pooling="cls", loss="bce"):
         super(patentModel, self).__init__()
         self.args = args
         self.config = pretrained_model_config
@@ -424,22 +424,24 @@ class patentModel(nn.Module):
         if args.freeze_adapter and (self.fac_adapter is not None):
             for p in self.fac_adapter.parameters():
                 p.requires_grad = False
-        if args.freeze_adapter and (self.et_adapter is not None):
-            for p in self.et_adapter.parameters():
-                p.requires_grad = False
         if args.freeze_adapter and (self.lin_adapter is not None):
             for p in self.lin_adapter.parameters():
+                p.requires_grad = False
+        if args.freeze_adapter and (self.et_adapter is not None):
+            for p in self.et_adapter.parameters():
                 p.requires_grad = False
         self.adapter_num = 0
         if self.fac_adapter is not None:
             self.adapter_num += 1
-        if self.et_adapter is not None:
+        if self.lin_adapter is not None:
             self.adapter_num += 1
+        if self.et_adapter is not None:
             self.adapter_num += 1
 
         if self.args.fusion_mode in ['concat', 'attention']:
             self.task_dense_lin = nn.Linear(self.config.hidden_size + self.config.hidden_size, self.config.hidden_size)
             self.task_dense_fac = nn.Linear(self.config.hidden_size + self.config.hidden_size, self.config.hidden_size)
+            self.task_dense_et = nn.Linear(self.config.hidden_size + self.config.hidden_size, self.config.hidden_size)
             self.task_dense = nn.Linear(self.config.hidden_size + self.config.hidden_size, self.config.hidden_size)
 
         if self.args.fusion_mode == 'attention':
@@ -482,13 +484,20 @@ class patentModel(nn.Module):
                 fac_features = self.task_dense_fac(torch.cat([combine_features, fac_adapter_outputs], dim=2))
             if self.lin_adapter is not None:
                 lin_features = self.task_dense_lin(torch.cat([combine_features, lin_adapter_outputs], dim=2))
+            if self.et_adapter is not None:
+                et_features = self.task_dense_et(torch.cat([combine_features, et_adapter_outputs], dim=2))
             if self.fac_adapter is not None and self.lin_adapter is not None:
                 task_features = self.task_dense(torch.cat([fac_features, lin_features], dim=2))
+            if self.et_adapter is not None and self.lin_adapter is not None:
+                task_features = self.task_dense(torch.cat([et_features, lin_features], dim=2))
 
         elif self.args.fusion_mode == 'attention':
             q = pretrained_model_last_hidden_states
             if self.fac_adapter is not None and self.lin_adapter is not None:
                 features = self.attention(fac_adapter_outputs, lin_adapter_outputs, lin_adapter_outputs)[0]
+                task_features = self.task_dense(torch.cat([q, features], dim=2))
+            elif self.et_adapter is not None and self.lin_adapter is not None:
+                features = self.attention(et_adapter_outputs, lin_adapter_outputs, lin_adapter_outputs)[0]
                 task_features = self.task_dense(torch.cat([q, features], dim=2))
             elif self.fac_adapter is not None:
                 features = fac_adapter_outputs
@@ -496,8 +505,13 @@ class patentModel(nn.Module):
             elif self.lin_adapter is not None:
                 features = lin_adapter_outputs
                 lin_features = self.attention(q, features, features)[0]
+            elif self.et_adapter is not None:
+                features = et_adapter_outputs
+                et_features = self.attention(q, features, features)[0]
         
         if self.fac_adapter is not None and self.lin_adapter is not None:
+            sequence_output = self.dropout(task_features)
+        elif self.et_adapter is not None and self.lin_adapter is not None:
             sequence_output = self.dropout(task_features)
         elif self.fac_adapter is not None:
             sequence_output = self.dropout(fac_features)

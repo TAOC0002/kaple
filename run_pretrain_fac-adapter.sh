@@ -2,12 +2,12 @@
 # Licensed under the MIT license.
 # Pre-train fac-adapter
 
-task=cdr
+task=ddi
 GPU='0'
-CUDA_VISIBLE_DEVICES=$GPU python ./adapters/patent-ner.py  \
+CUDA_VISIBLE_DEVICES=$GPU python ./adapters/patent-rel.py  \
         --model_type roberta \
         --model_name_or_path roberta-large \
-        --data_dir ./data/cdr  \
+        --data_dir ./data/ddi  \
         --output_dir proc_data/adapter_pretraining \
         --restore '' \
         --do_train  \
@@ -28,4 +28,4 @@ CUDA_VISIBLE_DEVICES=$GPU python ./adapters/patent-ner.py  \
         --adapter_skip_layers 0 \
         --adapter_transformer_layers 2 \
         --meta_adapter_model="" \
-        --comment='cdr-64-5epochs'
+        --comment='empty'

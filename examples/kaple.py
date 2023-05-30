@@ -56,9 +56,9 @@ def main():
     parser.add_argument("--adapter_skip_layers", default=3, type=int,
                         help="The skip_layers of adapter according to bert layers")
 
-    parser.add_argument('--meta_fac_adaptermodel', default='',type=str, help='the pretrained factual adapter model')
-    parser.add_argument('--meta_et_adaptermodel', default='',type=str, help='the pretrained entity typing adapter model')
+    parser.add_argument('--meta_fac_adaptermodel', default='', type=str, help='the pretrained factual adapter model')
     parser.add_argument('--meta_lin_adaptermodel', default='', type=str, help='the pretrained linguistic adapter model')
+    parser.add_argument('--meta_et_adaptermodel', default='', type=str, help='the pretrained entity typing adapter model')
 
     parser.add_argument('--meta_bertmodel', default='', type=str, help='the pretrained bert model')
     parser.add_argument('--meta_patentmodel', default='', type=str, help='the pretrained patent model')
@@ -207,7 +207,12 @@ def main():
         lin_adapter = load_pretrained_adapter(lin_adapter,args.meta_lin_adaptermodel)
     else:
         lin_adapter = None
-    patent_model = patentModel(args, pretrained_model.config, fac_adapter=fac_adapter, et_adapter=et_adapter, lin_adapter=lin_adapter, max_seq_length=args.max_seq_length, pooling=args.pooling, loss=args.loss)
+    if args.meta_et_adaptermodel:
+        et_adapter = AdapterModel(args, pretrained_model.config)
+        et_adapter = load_pretrained_adapter(et_adapter,args.meta_et_adaptermodel)
+    else:
+        et_adapter = None
+    patent_model = patentModel(args, pretrained_model.config, fac_adapter=fac_adapter, lin_adapter=lin_adapter, et_adapter=et_adapter, max_seq_length=args.max_seq_length, pooling=args.pooling, loss=args.loss)
 
     # From a pre-trained checkpoint of roberta-large
     if args.meta_bertmodel:

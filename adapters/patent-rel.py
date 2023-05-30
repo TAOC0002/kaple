@@ -190,8 +190,8 @@ def train(args, train_dataset, val_dataset, model, tokenizer):
             tr_loss += loss.item()
 
             if (step + 1) % args.gradient_accumulation_steps == 0:
-                scheduler.step()  # Update learning rate schedule
                 optimizer.step()
+                scheduler.step()  # Update learning rate schedule
                 # model.zero_grad()
                 pretrained_model.zero_grad()
                 adapter_model.zero_grad()
@@ -205,27 +205,6 @@ def train(args, train_dataset, val_dataset, model, tokenizer):
                         logger.info("Epoch {}/{} - Iter {} / {}, loss = {:.5f}, time used = {:.3f}s".format(epoch+1, int(
                             args.num_train_epochs), step, len(train_dataloader), loss.item(), time.time() - start))
 
-                # if args.local_rank in [-1, 0] and args.save_steps > 0 and global_step % args.save_steps == 0:
-                #     # Save model checkpoint
-                #     output_dir = os.path.join(args.output_dir, 'checkpoint-{}'.format(global_step))
-                #     if not os.path.exists(output_dir):
-                #         os.makedirs(output_dir)
-                #     model_to_save = adapter_model.module if hasattr(adapter_model,
-                #                                             'module') else adapter_model  # Take care of distributed/parallel training
-                #     model_to_save.save_pretrained(output_dir)  # save to pytorch_model.bin  model.state_dict()
-
-                #     torch.save(optimizer.state_dict(), os.path.join(output_dir, 'optimizer.bin'))
-                #     torch.save(scheduler.state_dict(), os.path.join(output_dir, 'scheduler.bin'))
-                #     torch.save(args, os.path.join(output_dir, 'training_args.bin'))
-                #     torch.save(global_step, os.path.join(args.output_dir, 'global_step.bin'))
-
-                #     logger.info("Saving model checkpoint, optimizer, global_step to %s", output_dir)
-                #     if (global_step / args.save_steps) > args.max_save_checkpoints:
-                #         try:
-                #             shutil.rmtree(os.path.join(args.output_dir, 'checkpoint-{}'.format(
-                #                 global_step - args.max_save_checkpoints * args.save_steps)))
-                #         except OSError as e:
-                #             print(e)
                 if args.local_rank == -1 and args.evaluate_during_training and global_step % args.eval_steps == 0:  # Only evaluate when single GPU otherwise metrics may not average well
                     model = (pretrained_model,adapter_model)
                     results = evaluate(args, val_dataset, model, tokenizer)
@@ -265,10 +244,6 @@ def evaluate(args, val_dataset, model, tokenizer):
     val_sampler = SequentialSampler(val_dataset) if args.local_rank == -1 else DistributedSampler(val_dataset)
     val_dataloader = DataLoader(val_dataset, sampler=val_sampler, batch_size=args.eval_batch_size)
 
-    # validation.
-    # logging.info("***** Running validation *****")
-    # logging.info(f"  Num val_examples = {len(val_dataset)}")
-    # logging.info(" Validation Batch size = %d", args.eval_batch_size)
     eval_loss = 0.0
     nb_eval_steps = 0
     preds = None
@@ -298,11 +273,6 @@ def evaluate(args, val_dataset, model, tokenizer):
             gold_result += inputs['labels'].tolist()
             eval_loss += tmp_eval_loss.mean().item()
         nb_eval_steps += 1
-        # logger.info(
-        #     "Validation Iter {} / {}, loss = {:.5f}, time used = {:.3f}s".format(step,
-        #                                                                          len(val_dataloader),
-        #                                                                          tmp_eval_loss.mean().item(),
-        #                                                                          time.time() - start))
 
     micro_F1 = f1_score(y_true=gold_result, y_pred=prediction, average='micro')
     macro_F1 = f1_score(y_true=gold_result, y_pred=prediction, average='macro')
@@ -741,18 +711,6 @@ def main():
         # train_dataset = RelDataset(examples=train_examples, max_seq_length=args.max_seq_length)
         global_step, tr_loss = train(args, train_dataset, val_dataset, model, tokenizer)
         logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
-
-    # if args.do_train and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
-    #     # Create output directory if needed
-    #     if not os.path.exists(args.output_dir) and args.local_rank in [-1, 0]:
-    #         os.makedirs(args.output_dir)
-
-    #     logger.info("Saving model checkpoint to %s", args.output_dir)
-    #     model_to_save = model.module if hasattr(model, 'module') else model  # Take care of distributed/parallel training
-    #     model_to_save.save_pretrained(args.output_dir)
-    #     tokenizer.save_pretrained(args.output_dir)
-    #     torch.save(args, os.path.join(args.output_dir, 'training_args.bin'))
-
 
 
 if __name__ == '__main__':

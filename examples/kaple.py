@@ -59,6 +59,7 @@ def main():
     parser.add_argument('--meta_fac_adaptermodel', default='', type=str, help='the pretrained factual adapter model')
     parser.add_argument('--meta_lin_adaptermodel', default='', type=str, help='the pretrained linguistic adapter model')
     parser.add_argument('--meta_et_adaptermodel', default='', type=str, help='the pretrained entity typing adapter model')
+    parser.add_argument('--optimize_et_loss', default=False, type=bool, help="Whether or not to optimize et adapter loss.")
 
     parser.add_argument('--meta_bertmodel', default='', type=str, help='the pretrained bert model')
     parser.add_argument('--meta_patentmodel', default='', type=str, help='the pretrained patent model')
@@ -139,6 +140,9 @@ def main():
     name_prefix = str(args.comment)
     args.my_model_name = name_prefix
     args.output_dir = os.path.join(args.output_dir, name_prefix)
+    assert args.mode == 'bi'
+    assert args.loss in ['bce', 'mse']
+    assert not (args.meta_fac_adaptermodel and args.meta_et_adaptermodel and args.meta_lin_adaptermodel)
 
     if os.path.exists(args.output_dir) and os.listdir(args.output_dir) and args.do_train and not args.overwrite_output_dir:
         raise ValueError("Output directory ({}) already exists and is not empty. Use --overwrite_output_dir to overcome.".format(args.output_dir))
@@ -306,14 +310,6 @@ def main():
         else:
             args.train_steps = int(args.num_train_epochs * len(train_examples) // args.train_batch_size)
             num_train_optimization_steps = args.train_steps
-        # Set up wandb
-        # wandb.init(
-        #     project='K-adapter',
-        #     name='Biencoder-hyperparams-sweep'+'-trial-1',
-        #     config=args
-        # )
-        # args = wandb.config
-
         
         if args.mode == "cross":
             all_input_ids = torch.tensor([f.input_ids for f in train_features], dtype=torch.long)
@@ -443,43 +439,62 @@ def main():
                 assert torch.ne(label_ids, claim_label_ids).sum() == 0
 
                 prior_pretrained_model_outputs = pretrained_model(input_ids=prior_input_ids, token_type_ids=prior_segment_ids, attention_mask=prior_input_mask)
-                prior_output_logits, prior_fac_logits = patent_model(prior_pretrained_model_outputs)
+                if args.optimize_et_loss:
+                    prior_output_logits, prior_fac_logits, prior_et_logits = patent_model(prior_pretrained_model_outputs)
+                else:
+                    prior_output_logits, prior_fac_logits = patent_model(prior_pretrained_model_outputs)
 
                 claim_pretrained_model_outputs = pretrained_model(input_ids=claim_input_ids, token_type_ids=claim_segment_ids, attention_mask=claim_input_mask)
-                claim_output_logits, claim_fac_logits = patent_model(claim_pretrained_model_outputs)
+                if args.optimize_et_loss:
+                    claim_output_logits, claim_fac_logits, claim_et_logits = patent_model(claim_pretrained_model_outputs)
+                else:
+                    claim_output_logits, claim_fac_logits = patent_model(claim_pretrained_model_outputs)
 
                 if args.pooling == "mean":
                     prior_vectors = torch.mean(prior_output_logits, dim=2)
                     claim_vectors = torch.mean(claim_output_logits, dim=2)
                     prior_fac_vectors = torch.mean(prior_fac_logits, dim=2)
                     claim_fac_vectors = torch.mean(claim_fac_logits, dim=2)
+                    if args.optimize_et_loss:
+                        prior_et_vectors = torch.mean(prior_et_logits, dim=2)
+                        claim_et_vectors = torch.mean(claim_et_logits, dim=2)
                 
                 elif args.pooling == "cls":
                     prior_vectors = prior_output_logits[:,0,:]
                     claim_vectors = claim_output_logits[:,0,:]
                     prior_fac_vectors = prior_fac_logits[:,0,:]
                     claim_fac_vectors = claim_fac_logits[:,0,:]
+                    if args.optimize_et_loss:
+                        prior_et_vectors = prior_et_logits[:,0,:]
+                        claim_et_vectors = claim_et_logits[:,0,:]
                 
                 if args.sim_measure == "cosine":
                     cosines = cosine_sim(prior_vectors, claim_vectors, args.normalize, device) # -> (bz, 1)
                     if args.meta_fac_adaptermodel:
                         fac_cosines = cosine_sim(prior_fac_vectors, claim_fac_vectors, args.normalize, device)  
+                    if args.meta_et_adaptermodel and args.optimize_et_loss == True:
+                        et_cosines = cosine_sim(prior_et_vectors, claim_et_vectors, args.normalize, device)
 
                 labels = label_ids.unsqueeze(dim=1)
                 if args.loss == "bce":
+                    loss = loss_fct(sigmoid(cosines), labels)
                     if args.meta_fac_adaptermodel:
-                        loss = loss_fct(sigmoid(cosines), labels) + loss_fct(sigmoid(fac_cosines), labels)
-                    else:
-                        loss = loss_fct(sigmoid(cosines), labels)
+                        loss += loss_fct(sigmoid(fac_cosines), labels)
+                    if args.meta_et_adaptermodel and args.optimize_et_loss:
+                        loss += loss_fct(sigmoid(et_cosines), labels)
+                        
                 elif args.loss == "infonce":
                     if args.meta_fac_adaptermodel:
                         loss = infonce(prior_vectors, claim_vectors, labels, prior_fac_vectors, claim_fac_vectors)
                     else:
                         loss = infonce(prior_vectors, claim_vectors, labels)
+
                 elif args.loss == "mse":
                     loss = loss_fct(cosines, labels)
                     if args.meta_fac_adaptermodel:
                         loss += loss_fct(fac_cosines, labels)
+                    if args.meta_et_adaptermodel and args.optimze_et_loss:
+                        loss += loss_fct(sigmoid(et_cosines), labels)
 
                 if args.n_gpu > 1:
                     loss = loss.mean()  # mean() to average on multi-gpu.
@@ -624,44 +639,62 @@ def main():
 
                             with torch.no_grad():
                                 prior_pretrained_model_outputs = pretrained_model(input_ids=prior_input_ids, token_type_ids=prior_segment_ids, attention_mask=prior_input_mask)
-                                prior_output_logits, prior_fac_logits = patent_model(prior_pretrained_model_outputs)
+                                if args.optimize_et_loss:
+                                    prior_output_logits, prior_fac_logits, prior_et_logits = patent_model(prior_pretrained_model_outputs)
+                                else:
+                                    prior_output_logits, prior_fac_logits = patent_model(prior_pretrained_model_outputs)
 
                                 claim_pretrained_model_outputs = pretrained_model(input_ids=claim_input_ids, token_type_ids=claim_segment_ids, attention_mask=claim_input_mask)
-                                claim_output_logits, claim_fac_logits = patent_model(claim_pretrained_model_outputs)
+                                if args.optimize_et_loss:
+                                    claim_output_logits, claim_fac_logits, claim_et_logits = patent_model(claim_pretrained_model_outputs)
+                                else:
+                                    claim_output_logits, claim_fac_logits = patent_model(claim_pretrained_model_outputs)
 
                                 if args.pooling == "mean":
                                     prior_vectors = torch.mean(prior_output_logits, dim=2)
                                     claim_vectors = torch.mean(claim_output_logits, dim=2)
                                     prior_fac_vectors = torch.mean(prior_fac_logits, dim=2)
                                     claim_fac_vectors = torch.mean(claim_fac_logits, dim=2)
+                                    if args.optimize_et_loss:
+                                        prior_et_vectors = torch.mean(prior_et_logits, dim=2)
+                                        claim_et_vectors = torch.mean(claim_et_logits, dim=2)
                                 
                                 elif args.pooling == "cls":
                                     prior_vectors = prior_output_logits[:,0,:]
                                     claim_vectors = claim_output_logits[:,0,:]
                                     prior_fac_vectors = prior_fac_logits[:,0,:]
                                     claim_fac_vectors = claim_fac_logits[:,0,:]
-
+                                    if args.optimize_et_loss:
+                                        prior_et_vectors = prior_et_logits[:,0,:]
+                                        claim_et_vectors = claim_et_logits[:,0,:]
+                                
                                 if args.sim_measure == "cosine":
                                     cosines = cosine_sim(prior_vectors, claim_vectors, args.normalize, device) # -> (bz, 1)
                                     if args.meta_fac_adaptermodel:
                                         fac_cosines = cosine_sim(prior_fac_vectors, claim_fac_vectors, args.normalize, device)  
+                                    if args.meta_et_adaptermodel and args.optimize_et_loss == True:
+                                        et_cosines = cosine_sim(prior_et_vectors, claim_et_vectors, args.normalize, device)
 
                                 labels = label_ids.unsqueeze(dim=1)
-
                                 if args.loss == "bce":
+                                    loss = loss_fct(sigmoid(cosines), labels)
                                     if args.meta_fac_adaptermodel:
-                                        loss = loss_fct(sigmoid(cosines), labels) + loss_fct(sigmoid(fac_cosines), labels)
-                                    else:
-                                        loss = loss_fct(sigmoid(cosines), labels)
+                                        loss += loss_fct(sigmoid(fac_cosines), labels)
+                                    if args.meta_et_adaptermodel and args.optimize_et_loss:
+                                        loss += loss_fct(sigmoid(et_cosines), labels)
+                                        
                                 elif args.loss == "infonce":
                                     if args.meta_fac_adaptermodel:
                                         loss = infonce(prior_vectors, claim_vectors, labels, prior_fac_vectors, claim_fac_vectors)
                                     else:
                                         loss = infonce(prior_vectors, claim_vectors, labels)
+
                                 elif args.loss == "mse":
                                     loss = loss_fct(cosines, labels)
                                     if args.meta_fac_adaptermodel:
                                         loss += loss_fct(fac_cosines, labels)
+                                    if args.meta_et_adaptermodel and args.optimze_et_loss:
+                                        loss += loss_fct(sigmoid(et_cosines), labels)
 
                                 eval_loss += loss
 

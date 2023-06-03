@@ -461,6 +461,7 @@ class patentModel(nn.Module):
 
     def forward(self, pretrained_model_outputs, labels=None, pseudo_labels=None, pseudo_fac_labels=None, labelling=False):
         fac_adapter_outputs = torch.rand(8,50,20)
+        et_adapter_outputs = torch.rand(8,50,20)
         pretrained_model_last_hidden_states = pretrained_model_outputs[0]
         if self.fac_adapter is not None:
             fac_adapter_outputs, _ = self.fac_adapter(pretrained_model_outputs)
@@ -493,8 +494,8 @@ class patentModel(nn.Module):
 
         elif self.args.fusion_mode == 'attention':
             q = pretrained_model_last_hidden_states
-            if self.fac_adapter is not None and self.lin_adapter is not None:
-                features = self.attention(fac_adapter_outputs, lin_adapter_outputs, lin_adapter_outputs)[0]
+            if self.fac_adapter is not None and self.et_adapter is not None:
+                features = self.attention(et_adapter_outputs, fac_adapter_outputs, fac_adapter_outputs)[0]
                 task_features = self.task_dense(torch.cat([q, features], dim=2))
             elif self.et_adapter is not None and self.lin_adapter is not None:
                 features = self.attention(et_adapter_outputs, lin_adapter_outputs, lin_adapter_outputs)[0]
@@ -556,6 +557,8 @@ class patentModel(nn.Module):
             return (loss, outputs, fac_outputs)
         
         elif not labels and not pseudo_labels:
+            if self.args.optimize_et_loss == True and self.et_adapter is not None:
+                return sequence_output, fac_adapter_outputs, et_adapter_outputs
             return sequence_output, fac_adapter_outputs
 
     def save_pretrained(self, save_directory):

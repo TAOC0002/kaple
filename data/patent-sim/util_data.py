@@ -84,6 +84,9 @@ def collate_examples():
     dupl_ids = np.load('dupl_ids.npy', encoding="latin1", allow_pickle=True).item()
     cited_ids = np.load('cited_ids.npy', encoding="latin1", allow_pickle=True).item()
     id_dict = make_combis(target_ids, random_ids, cited_ids, dupl_ids)
+    _a = set([item[0] for item in id_dict['cited']]+[item[0] for item in id_dict['random']])
+    _b = set([item[1] for item in id_dict['cited']]+[item[1] for item in id_dict['random']])
+    intersection = set([corpus_abstract[id] for id in  _a.intersection(_b)]) 
 
     examples = {'index':[], 'text':[], 'text_b':[], 'label':[]}
     index = 0
@@ -98,12 +101,32 @@ def collate_examples():
             index += 1
 
     examples = pd.DataFrame(data=examples)
-    print(examples.shape)
-    examples = examples.iloc[-80000:,:]
-    examples = shuffle(examples, random_state=42)
-    examples = examples.iloc[-1000:,:]
-    # print(examples.shape)
+    num_total = examples.shape[0]
+    num_cited = examples.label.sum()
+    print('Total examples:', num_total)
+    print('Total cited examples', num_cited)
+    unique_text_b = examples.text_b.unique()
+    print('Unique text a:', examples.text.unique().size)
+    print('***Unique text b:', unique_text_b.size)
+    print('----------------------------------------------------------')
 
+    # Save text_b as kpar corpus
+    with open('../patent-sim-compact/corpus_pool.pkl', 'wb') as c:
+        pickle.dump(set(examples.text_b.unique().flatten()).difference(set(examples.text.unique().flatten())), c)
+
+    examples = examples.iloc[-80000:,:]
+    unique_text_a = examples.iloc[-num_cited:,:].text.unique()
+    print('+++Unique text a in cited pool:', unique_text_a.size)
+    print('Unique text b in cited pool:', examples.iloc[-num_cited:,:].text_b.unique().size)
+    examples = shuffle(examples, random_state=42)
+    others = examples.iloc[:80000-1000,:]
+    examples = examples.iloc[80000-1000:,:]
+    print('----------------------------------------------------------')
+
+    print('---Unique text a in example pool:', examples.text.unique().size)
+    print('Unique text b in example pool:', examples.text_b.unique().size)
+    print('----------------------------------------------------------')
+    
     valid_file = open("../patent-sim-compact/valid.jsonl", "w")
     train_file = open("../patent-sim-compact/train.jsonl", "w")
     valid_size = examples.shape[0] // 10
@@ -113,6 +136,31 @@ def collate_examples():
     train_file.write(json.dumps(json.loads(train), indent=4))
     valid_file.close()
     train_file.close()
+
+    ## Don't use the inverse map method, as we have duplicate ids (i.e. the same text may point back to two diff identifiers, it may point
+    ## to the secondary instead of the main identifier)
+    # inv_map = {v: k for k, v in corpus_abstract.items()}
+    # text_a_candidates = others.text.unique()
+    # print(len([1 for k, v in cited_ids.items() if len(v) > 0]))
+    # restricted_set = set(examples.text.unique().flatten()).union(set(unique_text_b.flatten()))
+    # text_a_filtered = [inv_map[candidate] for candidate in text_a_candidates if candidate not in restricted_set]
+    # array = [{'key': i, 'text': corpus_abstract[i], 'ground_truth': cited_ids[i]} for i in text_a_filtered if i in cited_ids]
+
+    # Construct test set for kpar
+    restricted_set = set(examples.text.unique().flatten()).union(set(unique_text_b.flatten()))
+    test_ids = {text_id: text_b_list for text_id, text_b_list in cited_ids.items() if len(text_b_list) > 0 and corpus_abstract[text_id] not in restricted_set}
+    test_ids = dict(sorted(test_ids.items(), key=lambda item: len(item[1]), reverse=True))
+    # test_ids = dict(itertools.islice(test_ids.items(),size))
+    print('Construting test set and their (known) ground truth in the corpus..')
+
+    array = [{'key': i, 'text': corpus_abstract[i], 'ground_truth': test_ids[i]} for i in test_ids]
+    test_file = open("../patent-sim-compact/test.jsonl", "w")
+    test_file.write(json.dumps(array, indent = 4))
+    test_file.close()
+
+    print('Text_a examples in KPAR test set:', len(array))
+    print('Unique text_a content in KPAR test set:', len(list(set([i['text'] for i in array]))))
+    # The discrepency between the two above is expected as we have duplicate ids
 
 
 def check_json_format(input_file):
@@ -143,50 +191,12 @@ def temp(indices):
         print(corpus_abstract[index])
         print()
 
-def kpar_test_set_construction(size):
-    # inverse dictionary
-    corpus_abstract = np.load('corpus_abstract.npy', encoding="latin1", allow_pickle=True).item()
-    inv_map = {v: k for k, v in corpus_abstract.items()}
-    with open('../patent-sim-compact/train.jsonl') as f:
-        train = json.load(f)
-    with open('../patent-sim-compact/valid.jsonl') as g:
-        valid = json.load(g)
-
-    # find text_a which we haven't encountered before
-    text_a = set()
-    text_b = set()
-    for line in train:
-        text_a.add(inv_map[line['text']])
-        text_b.add(inv_map[line['text_b']])
-    for line in valid:
-        text_a.add(inv_map[line['text']])
-        text_b.add(inv_map[line['text_b']])
-
-    print('Number of patent application (text_a) in training and validation set:', len(text_a))
-    print('Number of prior art (text_b) in training and validation set:', len(text_b))
-
-    cited_ids = np.load('cited_ids.npy', encoding="latin1", allow_pickle=True).item()
-    test_ids = {text: text_b_list for text, text_b_list in cited_ids.items() if text not in text_a}
-    for test_id in test_ids:
-        text_b_list = [b for b in test_ids[test_id] if b in text_b]
-        test_ids[test_id] = text_b_list
-    test_ids = dict(sorted(test_ids.items(), key=lambda item: len(item[1]), reverse=True))
-    test_ids = dict(itertools.islice(test_ids.items(),size))
-    print('Construting test set with size', size, 'and their ground truth (known) in the corpus..')
-
-    array = [{'key': i, 'text': corpus_abstract[i], 'ground_truth': test_ids[i]} for i in test_ids]
-    test_file = open("../patent-sim-compact/test.jsonl", "w")
-    test_file.write(json.dumps(array, indent = 4))
-    test_file.close()
-    text_a.update(text_b)
-    with open('../patent-sim-compact/corpus_pool.pkl', 'wb') as c:
-        pickle.dump(text_a, c)
 
 if __name__ == "__main__":
     # make_full_section_corpus()
-    # collate_examples()
+    collate_examples()
     # check_json_format('valid.jsonl')
     # eda()
     # kpar_test_set_construction(size=100)
-    indices = ['US6629951', 'US6083255']
-    temp(indices)
+    # indices = ['US9050457', 'US8676351']
+    # temp(indices)

@@ -112,7 +112,7 @@ def collate_examples():
 
     # Save text_b as kpar corpus
     with open('../patent-sim-compact/corpus_pool.pkl', 'wb') as c:
-        pickle.dump(set(examples.text_b.unique().flatten()).difference(set(examples.text.unique().flatten())), c)
+        pickle.dump(set(examples.index.unique().flatten()).difference(set(examples.text.unique().flatten())), c)
 
     examples = examples.iloc[-80000:,:]
     unique_text_a = examples.iloc[-num_cited:,:].text.unique()
@@ -191,12 +191,23 @@ def temp(indices):
         print(corpus_abstract[index])
         print()
 
+# def correction():
+#     corpus_abstract = np.load('corpus_abstract.npy', encoding="latin1", allow_pickle=True).item()
+#     inv_map = {v: k for k, v in corpus_abstract.items()}
+#     with open('../patent-sim-compact/corpus_pool.pkl', 'rb') as fp:
+#         corpus_pool = pickle.load(fp)
+#     new = []
+#     for text in corpus_pool:
+#         new.append(inv_map[text])
+#     with open('../patent-sim-compact/new_corpus_pool.pkl', 'wb') as c:
+#         pickle.dump(new, c)
 
 if __name__ == "__main__":
     # make_full_section_corpus()
-    collate_examples()
+    # collate_examples()
     # check_json_format('valid.jsonl')
     # eda()
     # kpar_test_set_construction(size=100)
     # indices = ['US9050457', 'US8676351']
     # temp(indices)
+    # correction()

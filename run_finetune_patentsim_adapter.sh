@@ -4,8 +4,8 @@
 # batch=8
 # accu=4
 # lr=5e-6
-# GPU='0'
-# CUDA_VISIBLE_DEVICES=$GPU python examples/simcse.py \
+# GPU='0,1'
+# CUDA_VISIBLE_DEVICES=$GPU python -m torch.distributed.launch --nproc_per_node 2 examples/simcse.py \
 # --model_name_or_path simcse \
 # --data_dir data/patent-sim-compact \
 # --preprocess_type read_examples_origin \
@@ -20,17 +20,17 @@
 # --adam_epsilon 1e-6 \
 # --weight_decay 0 \
 # --freeze_bert="" \
-# --num_train_epochs 30 \
+# --num_train_epochs 15 \
 # --metrics auc \
-# --comment temp \
+# --comment parallel \
 # --overwrite_output_dir \
-# --mode bi
+# --mode cross
 
 batch=8
 accu=4
 lr=5e-6
-GPU='1'
-CUDA_VISIBLE_DEVICES=$GPU python examples/kaple.py \
+GPU='1,3'
+CUDA_VISIBLE_DEVICES=$GPU python -m torch.distributed.launch --nproc_per_node 2 examples/kaple.py \
 --model_name_or_path roberta-large \
 --data_dir data/patent-sim-compact \
 --preprocess_type read_examples_origin \
@@ -49,14 +49,14 @@ CUDA_VISIBLE_DEVICES=$GPU python examples/kaple.py \
 --adapter_size 768 \
 --adapter_list "0,11,22" \
 --adapter_skip_layers 0 \
---meta_fac_adaptermodel="./proc_data/adapter_pretraining/ddi-64-5epochs-lda/best-checkpoint/pytorch_model.bin" \
+--meta_fac_adaptermodel="./pretrained_models/fac-adapter/pytorch_model.bin" \
 --meta_et_adaptermodel="" \
---meta_lin_adaptermodel="" \
+--meta_lin_adaptermodel="./pretrained_models/lin-adapter/pytorch_model.bin" \
 --optimize_et_loss="" \
 --fusion_mode='concat' \
---num_train_epochs 30 \
+--num_train_epochs 20 \
 --metrics auc \
---comment kpar-base \
+--comment parallel \
 --overwrite_output_dir \
 --mode bi \
 --pooling cls \
@@ -69,3 +69,4 @@ CUDA_VISIBLE_DEVICES=$GPU python examples/kaple.py \
 # --meta_patentmodel="./proc_data/roberta_patentsim_compact/cdr-ddi-test/pytorch_model_best.bin" \
 # --meta_bertmodel="./proc_data/roberta_patentmatch/patentmatch_batch-8_lr-5e-06_warmup-0_epoch-6.0_concat/pytorch_bertmodel_4400_0.5436605821410952.bin"
 # "./pretrained_models/lin-adapter/pytorch_model.bin"
+# "./pretrained_models/fac-adapter/pytorch_model.bin"

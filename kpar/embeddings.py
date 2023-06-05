@@ -43,10 +43,10 @@ def convert_to_features(examples, tokenizer, max_seq_length, logger, verbose=Fal
     for example_index, example in enumerate(examples):
         if example_index % 1000 == 0 and verbose:
             logger.info('Processing {} examples...'.format(example_index))
-        tokens = tokenizer.tokenize(example.text)
+        tokens = ['<s>']+tokenizer.tokenize(example.text)
         if len(tokens) > max_seq_length:
             tokens = tokens[:max_seq_length]
-        examples[example_index].input_ids, examples[example_index].input_mask, examples[example_index].segment_ids = tokens_to_ids(tokenizer, ['<s>']+tokens, max_seq_length)
+        examples[example_index].input_ids, examples[example_index].input_mask, examples[example_index].segment_ids = tokens_to_ids(tokenizer, tokens, max_seq_length)
     return examples
 
 def construct_embed_pool(corpus_index_file, corpus_content_file, verbose=False):
@@ -69,16 +69,32 @@ def construct_test_pool(test_filename):
             examples.append(Patent(index=index, text=text, ground_truth=ground_truth))
     return examples
 
-def get_embedding(examples, pretrained_model, patent_model, device):
+def get_embedding(examples, model, device):
+
+    if len(model) == 2:
+        pretrained_model, patent_model = model
+    else:
+        pretrained_model = model[0]
+
     first = True
+    corpus_size = len(examples)
+    print('Corpus size:', corpus_size)
+    count = 0
+    interval = corpus_size // 20
     with torch.no_grad():
         for e in examples:
+            count += 1
+            if count % interval == 0:
+                print('Processed', count, '/', corpus_size, 'examples ...')
             input_ids = torch.tensor([e.input_ids], dtype=torch.long).to(device)
             input_mask = torch.tensor([e.input_mask], dtype=torch.long).to(device)
             segment_ids = torch.tensor([e.segment_ids], dtype=torch.long).to(device)
 
-            model_outputs = pretrained_model(input_ids=input_ids, token_type_ids=segment_ids, attention_mask=input_mask)
-            output_logits, _ = patent_model(model_outputs)
+            output_logits = pretrained_model(input_ids=input_ids, token_type_ids=segment_ids, attention_mask=input_mask)
+            if len(model) == 2:
+                output_logits, _ = patent_model(output_logits)
+            else:
+                output_logits = output_logits.last_hidden_state
             if first:
                 embedding = output_logits[:,0,:]
                 first = False
@@ -89,16 +105,16 @@ def get_embedding(examples, pretrained_model, patent_model, device):
     embedding = embedding.cpu().detach().numpy().astype('float32')
     return embedding
 
-def compute_embed_pool(corpus_index_file, corpus_content_file, tokenizer, save_dir, pretrained_model, patent_model, logger, device, max_seq_length=512):
+def compute_embed_pool(corpus_index_file, corpus_content_file, tokenizer, save_dir, model, logger, device, max_seq_length=512):
     db_examples = construct_embed_pool(corpus_index_file, corpus_content_file)
     db_features = convert_to_features(db_examples, tokenizer, max_seq_length, logger)
-    embedding = get_embedding(db_features, pretrained_model, patent_model, device)
+    embedding = get_embedding(db_features, model, device)
     return db_examples, embedding
 
-def compute_query_pool(query_file, tokenizer, save_dir, pretrained_model, patent_model, logger, device, max_seq_length=512):
+def compute_query_pool(query_file, tokenizer, save_dir, model, logger, device, max_seq_length=512):
     query_examples = construct_test_pool(query_file)
     query_features = convert_to_features(query_examples, tokenizer, max_seq_length, logger)
-    embedding = get_embedding(query_features, pretrained_model, patent_model, device)
+    embedding = get_embedding(query_features, model, device)
     return query_examples, embedding
 
 def construct_cross_retriever_data(query_file, corpus_index_file, corpus_content_file, tokenizer, logger, max_seq_length=512):

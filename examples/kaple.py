@@ -55,6 +55,8 @@ def main():
                         help="The layer where add an adapter")
     parser.add_argument("--adapter_skip_layers", default=3, type=int,
                         help="The skip_layers of adapter according to bert layers")
+    parser.add_argument("--max_grad_norm", default=1.0, type=float,
+                        help="Max gradient norm.")
 
     parser.add_argument('--meta_fac_adaptermodel', default='', type=str, help='the pretrained factual adapter model')
     parser.add_argument('--meta_lin_adaptermodel', default='', type=str, help='the pretrained linguistic adapter model')
@@ -140,7 +142,6 @@ def main():
     name_prefix = str(args.comment)
     args.my_model_name = name_prefix
     args.output_dir = os.path.join(args.output_dir, name_prefix)
-    assert args.mode == 'bi'
     assert args.loss in ['bce', 'mse']
     assert not (args.meta_fac_adaptermodel and args.meta_et_adaptermodel and args.meta_lin_adaptermodel)
 
@@ -269,21 +270,6 @@ def main():
 
     logger.info("Training/evaluation parameters %s", args)
 
-    if args.local_rank != -1:
-        try:
-            from apex.parallel import DistributedDataParallel as DDP
-        except ImportError:
-            raise ImportError(
-                "Please install apex from https://www.github.com/nvidia/apex to use distributed and fp16 training.")
-
-        model = DDP(model)
-    elif args.n_gpu > 1:
-        if args.freeze_bert:
-            patent_model = torch.nn.DataParallel(patent_model)
-        else:
-            pretrained_model = torch.nn.DataParallel(pretrained_model)
-            patent_model = torch.nn.DataParallel(patent_model)
-
     args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
     args.eval_batch_size = args.per_gpu_eval_batch_size * max(1, args.n_gpu)
 
@@ -368,10 +354,12 @@ def main():
 
         global_step = 0
 
-        logger.info("***** Running training *****")
-        logger.info("  Num examples = %d", len(train_examples))
-        logger.info("  Batch size = %d", args.train_batch_size)
-        logger.info("  Num steps = %d", num_train_optimization_steps)
+        if args.n_gpu > 1:
+            if args.freeze_bert:
+                patent_model = torch.nn.DataParallel(patent_model)
+            else:
+                pretrained_model = torch.nn.DataParallel(pretrained_model)
+                patent_model = torch.nn.DataParallel(patent_model)
 
         best_acc, best_auc = 0, 0
         if args.freeze_bert:
@@ -408,7 +396,7 @@ def main():
                 label_ids = label_ids.to('cpu').numpy()
 
                 if args.n_gpu > 1:
-                    loss = loss.mean()  # mean() to average on multi-gpu.
+                    loss = loss.mean() + Loss.mean()  # mean() to average on multi-gpu.
                 if args.fp16 and args.loss_scale != 1.0:
                     loss = loss * args.loss_scale
                 if args.gradient_accumulation_steps > 1:
@@ -525,6 +513,8 @@ def main():
                 optimizer.backward(loss)
             else:
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(pretrained_model.parameters(), args.max_grad_norm)
+                torch.nn.utils.clip_grad_norm_(patent_model.parameters(), args.max_grad_norm)
 
             if (nb_tr_steps + 1) % args.gradient_accumulation_steps == 0:
                 if args.fp16:
@@ -550,7 +540,6 @@ def main():
 
             if args.do_eval and ((global_step + 1) % args.eval_steps == 0) and eval_flag:
                 eval_flag = False
-                print('eval...')
                 for file in ['valid.jsonl']:
 
                     eval_examples = read_examples_dict[args.preprocess_type](os.path.join(args.data_dir, file),
@@ -559,9 +548,6 @@ def main():
                     gold_labels = []
                     eval_features = convert_examples_to_features_dict[args.preprocess_type](
                         eval_examples, tokenizer, args.max_seq_length, args.mode, logger, is_training=True)
-                    logger.info("***** Running evaluation *****")
-                    logger.info("  Num examples = %d", len(eval_examples))
-                    logger.info("  Batch size = %d", args.eval_batch_size)
 
                     if args.mode == "cross":
                         all_input_ids = torch.tensor([f.input_ids for f in eval_features], dtype=torch.long)
@@ -716,6 +702,11 @@ def main():
                     eval_loss = eval_loss / nb_eval_steps
                     eval_accuracy = eval_accuracy / nb_eval_examples
                     if args.local_rank in [-1, 0]:
+                        logger.info("***** Running training *****")
+                        logger.info("  Num examples = %d", len(train_examples))
+                        logger.info("  Batch size = %d", args.train_batch_size)
+                        logger.info("  Num steps = %d", num_train_optimization_steps)
+
                         if args.mode == "cross":
                             eval_auc = auc(logits_auc_, label_ids_auc_)
                         elif args.mode == "bi":
@@ -736,54 +727,54 @@ def main():
                        
                         logger.info(result)
 
-                    output_eval_file = os.path.join(args.output_dir, "eval_results.txt")
-                    with open(output_eval_file, "a", encoding='utf8') as writer:
-                        for key in sorted(result.keys()):
-                            logger.info("  %s = %s", key, str(result[key]))
-                            writer.write("%s = %s\n" % (key, str(result[key])))
-                        writer.write('*' * 80)
-                        writer.write('\n')
+                        output_eval_file = os.path.join(args.output_dir, "eval_results.txt")
+                        with open(output_eval_file, "a", encoding='utf8') as writer:
+                            for key in sorted(result.keys()):
+                                logger.info("  %s = %s", key, str(result[key]))
+                                writer.write("%s = %s\n" % (key, str(result[key])))
+                            writer.write('*' * 80)
+                            writer.write('\n')
 
-                    if early_stopping.early_stop:
-                        break
+                        if early_stopping.early_stop:
+                            break
 
-                    if args.metrics == 'accuracy':
-                        if eval_accuracy > best_acc:
-                            print("=" * 80)
-                            print("Best Acc", eval_accuracy)
-                            print("Saving Model......")
-                            best_acc = eval_accuracy
-                            # Save a trained model
-                            model_to_save = patent_model.module if hasattr(patent_model,
-                                                                    'module') else patent_model  # Take care of distributed/parallel training
-                            output_model_file = os.path.join(args.output_dir, "pytorch_model_best.bin")
-                            torch.save(model_to_save.state_dict(), output_model_file)
-                            model_to_save = pretrained_model.module if hasattr(pretrained_model,
-                                                                            'module') else pretrained_model
-                            output_model_file = os.path.join(args.output_dir, "pytorch_bertmodel_best.bin")
-                            torch.save(model_to_save.state_dict(), output_model_file)
-                        else:
-                            print("=" * 80)
-                            print("Best Acc", best_acc)
+                        if args.metrics == 'accuracy':
+                            if eval_accuracy > best_acc:
+                                print("=" * 80)
+                                print("Best Acc", eval_accuracy)
+                                print("Saving Model......")
+                                best_acc = eval_accuracy
+                                # Save a trained model
+                                model_to_save = patent_model.module if hasattr(patent_model,
+                                                                        'module') else patent_model  # Take care of distributed/parallel training
+                                output_model_file = os.path.join(args.output_dir, "pytorch_model_best.bin")
+                                torch.save(model_to_save.state_dict(), output_model_file)
+                                model_to_save = pretrained_model.module if hasattr(pretrained_model,
+                                                                                'module') else pretrained_model
+                                output_model_file = os.path.join(args.output_dir, "pytorch_bertmodel_best.bin")
+                                torch.save(model_to_save.state_dict(), output_model_file)
+                            else:
+                                print("=" * 80)
+                                print("Best Acc", best_acc)
 
-                    elif args.metrics == 'auc':
-                        if eval_auc > best_auc:
-                            print("=" * 80)
-                            print("Best AUC", eval_auc)
-                            print("Saving Model......")
-                            best_auc = eval_auc
-                            # Save a trained model
-                            model_to_save = patent_model.module if hasattr(patent_model,
-                                                                    'module') else patent_model  # Take care of distributed/parallel training
-                            output_model_file = os.path.join(args.output_dir, "pytorch_model_best.bin")
-                            torch.save(model_to_save.state_dict(), output_model_file)
-                            model_to_save = pretrained_model.module if hasattr(pretrained_model,
-                                                                            'module') else pretrained_model
-                            output_model_file = os.path.join(args.output_dir, "pytorch_bertmodel_best.bin")
-                            torch.save(model_to_save.state_dict(), output_model_file)
-                        else:
-                            print("=" * 80)
-                            print("Best AUC", best_auc)
+                        elif args.metrics == 'auc':
+                            if eval_auc > best_auc:
+                                print("=" * 80)
+                                print("Best AUC", eval_auc)
+                                print("Saving Model......")
+                                best_auc = eval_auc
+                                # Save a trained model
+                                model_to_save = patent_model.module if hasattr(patent_model,
+                                                                        'module') else patent_model  # Take care of distributed/parallel training
+                                output_model_file = os.path.join(args.output_dir, "pytorch_model_best.bin")
+                                torch.save(model_to_save.state_dict(), output_model_file)
+                                model_to_save = pretrained_model.module if hasattr(pretrained_model,
+                                                                                'module') else pretrained_model
+                                output_model_file = os.path.join(args.output_dir, "pytorch_bertmodel_best.bin")
+                                torch.save(model_to_save.state_dict(), output_model_file)
+                            else:
+                                print("=" * 80)
+                                print("Best AUC", best_auc)
 
 
                 if args.freeze_bert:

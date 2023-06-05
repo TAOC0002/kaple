@@ -5,15 +5,16 @@ def parse(parser):
                         help="The save dir. Embeddings and indexes will be saved under this directory.")
     parser.add_argument("--function", default=None, type=str, required=True,
                         help="Specify the operation of k-par. Either 'construct_db' or 'query'")
-    parser.add_argument("--model_name_or_path", default='roberta-large', type=str,
+    parser.add_argument("--model_name_or_path", default='roberta-large', required=True, type=str,
                     help="Path to pre-trained model or shortcut name selected in the list: roberta-large, simcse")
-    parser.add_argument("--patent_model_ckpt", default=None, type=str, required=True,
+    parser.add_argument("--patent_model_ckpt", default=None, type=str,
                         help="Path to the patent model checkpoint.")
-    parser.add_argument("--pretrained_model_ckpt", default=None, type=str, required=True,
+    parser.add_argument("--pretrained_model_ckpt", default=None, type=str,
                         help="Path to the pretrained model checkpoint.")
     parser.add_argument('--meta_fac_adaptermodel', default='',type=str, help='the pretrained factual adapter model')
     parser.add_argument('--meta_et_adaptermodel', default='',type=str, help='the pretrained entity typing adapter model')
     parser.add_argument('--meta_lin_adaptermodel', default='', type=str, help='the pretrained linguistic adapter model')
+    parser.add_argument('--optimize_et_loss', default=False, type=bool, help="Whether or not to optimize et adapter loss.")
     parser.add_argument("--corpus_index_file", default=None, type=str,
                         help="Path to the corpus index file (which is in .pkl format).")
     parser.add_argument("--corpus_content_file", default=None, type=str,

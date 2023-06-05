@@ -94,6 +94,8 @@ def main():
                         help="Loss function. Input one of (bce, infonce, mse)")
     parser.add_argument('--sim_measure', type=str, default='cosine',
                         help="Similarity measure, used only when mode = 'bi'. Input one of (cosine, linear_transform)")
+    parser.add_argument("--max_grad_norm", default=1.0, type=float,
+                        help="Max gradient norm.")
     args = parser.parse_args()
 
     args.do_train = True
@@ -149,17 +151,6 @@ def main():
     model = (pretrained_model)
 
     logger.info("Training/evaluation parameters %s", args)
-
-    if args.local_rank != -1:
-        try:
-            from apex.parallel import DistributedDataParallel as DDP
-        except ImportError:
-            raise ImportError(
-                "Please install apex from https://www.github.com/nvidia/apex to use distributed and fp16 training.")
-        model = DDP(model)
-    elif args.n_gpu > 1:
-        if not args.freeze_bert:
-            pretrained_model = torch.nn.DataParallel(pretrained_model)
 
     args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
     args.eval_batch_size = args.per_gpu_eval_batch_size * max(1, args.n_gpu)
@@ -235,6 +226,16 @@ def main():
                                          t_total=num_train_optimization_steps)
 
         global_step = 0
+        hidden_size = pretrained_model.config.hidden_size
+        if args.n_gpu > 1:
+            pretrained_model = torch.nn.DataParallel(pretrained_model)
+
+        # Distributed training (should be after apex fp16 initialization)
+        # if args.local_rank != -1:
+        #     pretrained_model = torch.nn.parallel.DistributedDataParallel(pretrained_model, device_ids=[args.local_rank],
+        #                                                                 output_device=args.local_rank,
+        #                                                                 find_unused_parameters=True)
+
 
         logger.info("***** Running training *****")
         logger.info("  Num examples = %d", len(train_examples))
@@ -266,7 +267,7 @@ def main():
         if args.pooling == "mean":
             classifier = nn.Linear(args.max_seq_length, 1).to(device)
         if args.pooling == "cls":
-            classifier = nn.Linear(pretrained_model.config.hidden_size, 1).to(device)
+            classifier = nn.Linear(hidden_size, 1).to(device)
 
         for step in bar:
             if args.mode == "cross":
@@ -301,7 +302,8 @@ def main():
 
                 tr_loss += loss.item()
                 train_loss = round(tr_loss * args.gradient_accumulation_steps / (nb_tr_steps + 1), 4)
-                bar.set_description("loss {}".format(train_loss))
+                if args.local_rank in [-1, 0]:
+                    bar.set_description("loss {}".format(train_loss))
 
                 train_accuracy += accuracy(output_logits, label_ids)
                 # np.sum((sigmoid(out) > 0.5) == true_labels)
@@ -355,7 +357,8 @@ def main():
 
                 tr_loss += loss.item()
                 train_loss = round(tr_loss * args.gradient_accumulation_steps / (nb_tr_steps + 1), 4)
-                bar.set_description("loss {}".format(train_loss))
+                if args.local_rank in [-1, 0]:
+                    bar.set_description("loss {}".format(train_loss))
 
                 output_logits = cosines.detach().cpu().numpy()
                 label_ids = label_ids.to('cpu').numpy()
@@ -375,6 +378,7 @@ def main():
                 optimizer.backward(loss)
             else:
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(pretrained_model.parameters(), args.max_grad_norm)
 
             if (nb_tr_steps + 1) % args.gradient_accumulation_steps == 0:
                 if args.fp16:
@@ -400,7 +404,6 @@ def main():
 
             if args.do_eval and ((global_step + 1) % args.eval_steps == 0) and eval_flag:
                 eval_flag = False
-                print('eval...')
                 for file in ['valid.jsonl']:
 
                     eval_examples = read_examples_dict[args.preprocess_type](os.path.join(args.data_dir, file),
@@ -409,9 +412,6 @@ def main():
                     gold_labels = []
                     eval_features = convert_examples_to_features_dict[args.preprocess_type](
                         eval_examples, tokenizer, args.max_seq_length, args.mode, logger, is_training=True)
-                    logger.info("***** Running evaluation *****")
-                    logger.info("  Num examples = %d", len(eval_examples))
-                    logger.info("  Batch size = %d", args.eval_batch_size)
 
                     if args.mode == "cross":
                         all_input_ids = torch.tensor([f.input_ids for f in eval_features], dtype=torch.long)
@@ -543,6 +543,9 @@ def main():
                     eval_loss = eval_loss / nb_eval_steps
                     eval_accuracy = eval_accuracy / nb_eval_examples
                     if args.local_rank in [-1, 0]:
+                        logger.info("***** Running evaluation *****")
+                        logger.info("  Num examples = %d", len(eval_examples))
+                        logger.info("  Batch size = %d", args.eval_batch_size)
                         if args.mode == "cross":
                             eval_auc = auc(logits_auc_, label_ids_auc_)
                         elif args.mode == "bi":
@@ -563,46 +566,46 @@ def main():
                        
                         logger.info(result)
 
-                    output_eval_file = os.path.join(args.output_dir, "eval_results.txt")
-                    with open(output_eval_file, "a", encoding='utf8') as writer:
-                        for key in sorted(result.keys()):
-                            logger.info("  %s = %s", key, str(result[key]))
-                            writer.write("%s = %s\n" % (key, str(result[key])))
-                        writer.write('*' * 80)
-                        writer.write('\n')
+                        output_eval_file = os.path.join(args.output_dir, "eval_results.txt")
+                        with open(output_eval_file, "a", encoding='utf8') as writer:
+                            for key in sorted(result.keys()):
+                                logger.info("  %s = %s", key, str(result[key]))
+                                writer.write("%s = %s\n" % (key, str(result[key])))
+                            writer.write('*' * 80)
+                            writer.write('\n')
 
-                    if early_stopping.early_stop:
-                        break
+                        if early_stopping.early_stop:
+                            break
 
-                    if args.metrics == 'accuracy':
-                        if eval_accuracy > best_acc:
-                            print("=" * 80)
-                            print("Best Acc", eval_accuracy)
-                            print("Saving Model......")
-                            best_acc = eval_accuracy
-                            # Save a trained model
-                            model_to_save = pretrained_model.module if hasattr(pretrained_model,
-                                                                            'module') else pretrained_model
-                            output_model_file = os.path.join(args.output_dir, "pytorch_bertmodel_best.bin")
-                            torch.save(model_to_save.state_dict(), output_model_file)
-                        else:
-                            print("=" * 80)
-                            print("Best Acc", best_acc)
+                        if args.metrics == 'accuracy':
+                            if eval_accuracy > best_acc:
+                                print("=" * 80)
+                                print("Best Acc", eval_accuracy)
+                                print("Saving Model......")
+                                best_acc = eval_accuracy
+                                # Save a trained model
+                                model_to_save = pretrained_model.module if hasattr(pretrained_model,
+                                                                                'module') else pretrained_model
+                                output_model_file = os.path.join(args.output_dir, "pytorch_bertmodel_best.bin")
+                                torch.save(model_to_save.state_dict(), output_model_file)
+                            else:
+                                print("=" * 80)
+                                print("Best Acc", best_acc)
 
-                    elif args.metrics == 'auc':
-                        if eval_auc > best_auc:
-                            print("=" * 80)
-                            print("Best AUC", eval_auc)
-                            print("Saving Model......")
-                            best_auc = eval_auc
-                            # Save a trained model
-                            model_to_save = pretrained_model.module if hasattr(pretrained_model,
-                                                                            'module') else pretrained_model
-                            output_model_file = os.path.join(args.output_dir, "pytorch_bertmodel_best.bin")
-                            torch.save(model_to_save.state_dict(), output_model_file)
-                        else:
-                            print("=" * 80)
-                            print("Best AUC", best_auc)
+                        elif args.metrics == 'auc':
+                            if eval_auc > best_auc:
+                                print("=" * 80)
+                                print("Best AUC", eval_auc)
+                                print("Saving Model......")
+                                best_auc = eval_auc
+                                # Save a trained model
+                                model_to_save = pretrained_model.module if hasattr(pretrained_model,
+                                                                                'module') else pretrained_model
+                                output_model_file = os.path.join(args.output_dir, "pytorch_bertmodel_best.bin")
+                                torch.save(model_to_save.state_dict(), output_model_file)
+                            else:
+                                print("=" * 80)
+                                print("Best AUC", best_auc)
 
 
                 if args.freeze_bert:

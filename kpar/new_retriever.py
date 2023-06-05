@@ -2,6 +2,7 @@ from __future__ import absolute_import, division, print_function
 
 import logging
 import os
+import math
 import argparse
 import numpy as np
 import torch
@@ -17,6 +18,7 @@ sys.path.append(rootPath)
 from pytorch_transformers.tokenization_roberta import RobertaTokenizer
 from examples.util import set_seed, PretrainedModel, AdapterModel, patentModel, load_pretrained_adapter, cosine_sim, load_model, sigmoid
 from parser import parse
+from transformers import AutoTokenizer
 from embeddings import compute_embed_pool, compute_query_pool
 from torch.nn.functional import cosine_similarity
 
@@ -57,36 +59,47 @@ if __name__ == "__main__":
     # Set seed
     set_seed(args)
 
-    tokenizer = RobertaTokenizer.from_pretrained('roberta-large', add_special_tokens=True)
-    pretrained_model = PretrainedModel(args)
-    if args.meta_fac_adaptermodel:
-        fac_adapter = AdapterModel(args, pretrained_model.config)
-        fac_adapter = load_pretrained_adapter(fac_adapter,args.meta_fac_adaptermodel)
-    else:
-        fac_adapter = None
-    if args.meta_et_adaptermodel:
-        et_adapter = AdapterModel(args, pretrained_model.config)
-        et_adapter = load_pretrained_adapter(et_adapter,args.meta_et_adaptermodel)
-    else:
-        et_adapter = None
-    if args.meta_lin_adaptermodel:
-        lin_adapter = AdapterModel(args, pretrained_model.config)
-        lin_adapter = load_pretrained_adapter(lin_adapter,args.meta_lin_adaptermodel)
-    else:
-        lin_adapter = None
-    patent_model = patentModel(args, pretrained_model.config,fac_adapter=fac_adapter, et_adapter=et_adapter, lin_adapter=lin_adapter, max_seq_length=args.max_seq_length, pooling="cls", loss="bce")
-    pretrained_model.to(args.device)
-    patent_model.to(args.device)
-    logger.info('Load pre-trained bert model state dict from {}'.format(args.pretrained_model_ckpt))
-    pretrained_model = load_model(args.pretrained_model_ckpt, pretrained_model)
-    logger.info('Load pertrained patent model state dict from {}'.format(args.patent_model_ckpt))
-    patent_model = load_model(args.patent_model_ckpt, patent_model)
-    pretrained_model.eval()
-    patent_model.eval()
+    if args.model_name_or_path == 'roberta-large':
+        tokenizer = RobertaTokenizer.from_pretrained('roberta-large', add_special_tokens=True)
+        pretrained_model = PretrainedModel(args)
+        if args.meta_fac_adaptermodel:
+            fac_adapter = AdapterModel(args, pretrained_model.config)
+            fac_adapter = load_pretrained_adapter(fac_adapter,args.meta_fac_adaptermodel)
+        else:
+            fac_adapter = None
+        if args.meta_et_adaptermodel:
+            et_adapter = AdapterModel(args, pretrained_model.config)
+            et_adapter = load_pretrained_adapter(et_adapter,args.meta_et_adaptermodel)
+        else:
+            et_adapter = None
+        if args.meta_lin_adaptermodel:
+            lin_adapter = AdapterModel(args, pretrained_model.config)
+            lin_adapter = load_pretrained_adapter(lin_adapter,args.meta_lin_adaptermodel)
+        else:
+            lin_adapter = None
+        patent_model = patentModel(args, pretrained_model.config, fac_adapter=fac_adapter, et_adapter=et_adapter, lin_adapter=lin_adapter, max_seq_length=args.max_seq_length, pooling="cls", loss="bce")
+        pretrained_model.to(args.device)
+        patent_model.to(args.device)
+        logger.info('Load pre-trained bert model state dict from {}'.format(args.pretrained_model_ckpt))
+        pretrained_model = load_model(args.pretrained_model_ckpt, pretrained_model)
+        logger.info('Load pertrained patent model state dict from {}'.format(args.patent_model_ckpt))
+        patent_model = load_model(args.patent_model_ckpt, patent_model)
+        pretrained_model.eval()
+        patent_model.eval()
+        model = (pretrained_model, patent_model)
+
+    elif args.model_name_or_path == 'simcse':
+        tokenizer = AutoTokenizer.from_pretrained("princeton-nlp/sup-simcse-roberta-large")
+        pretrained_model = PretrainedModel(args)
+        pretrained_model.to(args.device)
+        logger.info('Load pre-trained bert model state dict from {}'.format(args.pretrained_model_ckpt))
+        pretrained_model = load_model(args.pretrained_model_ckpt, pretrained_model)
+        pretrained_model.eval()
+        model = (pretrained_model, )
 
     if args.function == 'construct_db':
-        db_examples, embedding = compute_embed_pool(args.corpus_index_file, args.corpus_content_file, tokenizer, args.save_dir, pretrained_model, 
-                           patent_model, logger, device, max_seq_length=args.max_seq_length)
+        db_examples, embedding = compute_embed_pool(args.corpus_index_file, args.corpus_content_file, tokenizer, args.save_dir, 
+                                                    model, logger, device, max_seq_length=args.max_seq_length)
         with open(os.path.join(args.save_dir, 'db_examples.pkl'), 'wb') as f:
             pickle.dump(db_examples, f)
         np.save(os.path.join(args.save_dir, 'db_embedding.npy'), embedding)
@@ -97,7 +110,7 @@ if __name__ == "__main__":
         db_embeddings = np.load(os.path.join(args.save_dir, 'db_embedding.npy'), encoding="latin1")
         with open(os.path.join(args.save_dir, 'db_examples.pkl'), 'rb') as f:
             db_examples = pickle.load(f)
-        query_examples, embedding = compute_query_pool(args.query_file, tokenizer, args.save_dir, pretrained_model, patent_model, logger,
+        query_examples, embedding = compute_query_pool(args.query_file, tokenizer, args.save_dir, model, logger,
                                                        device, max_seq_length=args.max_seq_length)
         N = embedding.shape[0]
         dim = embedding.shape[1]
@@ -118,14 +131,14 @@ if __name__ == "__main__":
         hits = [[i+1 for i, e in enumerate(ranking_list[j]) if e in query_examples[j].ground_truth] for j in range(len(ranking_list))]
         map_hits = [[is_truth(e,j) for i, e in enumerate(ranking_list[j])] for j in range(len(ranking_list))]
         map_cum_hits = torch.cumsum(torch.tensor(map_hits), dim=1)
-        map_func = lambda y: torch.tensor([torch.tensor([y[xx][i]/(i+1) for i in range(len(y[xx])) if map_hits[xx] == 1]).sum()/len(hits[xx]) for xx in len(y)]).mean().item() 
-        map_score = map_func(map_cum_hits)
+        map_score = torch.tensor([torch.tensor([map_cum_hits[xx][i]/(i+1) if map_hits[xx][i] == 1 else 0 for i in range(len(map_cum_hits[xx]))]).sum()/len(hits[xx]) if len(hits[xx])>0 else 0 for xx in range(len(map_cum_hits))]).mean().item()
 
         ## Compute ndcg@k
         map_hits = np.array(map_hits)
-        denom = np.broadcast_to(np.log2(np.arange(args.topk))+2, (len(map_hits), args.topk))
+        denom = np.broadcast_to(np.log2(np.arange(args.topk)+2), (len(map_hits), args.topk))
         dcg = np.sum(map_hits / denom, axis=1)
         idcg = np.sum(-np.sort(-map_hits, axis=1) / denom, axis=1)
+        idcg = np.where(idcg > 0, idcg, math.inf)
         ndcg = np.mean(dcg / idcg)
 
         ## Write prediction results to output file and print evaluation outcomes

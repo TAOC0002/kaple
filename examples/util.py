@@ -15,7 +15,7 @@ import sys
 curPath = os.path.abspath(os.path.dirname(__file__))
 rootPath = os.path.split(curPath)[0]
 sys.path.append(rootPath)
-from pytorch_transformers import RobertaModel
+from pytorch_transformers import RobertaModel, BertModel
 from info_nce import InfoNCE
 
 class EarlyStopping():
@@ -285,10 +285,14 @@ class Adapter(nn.Module):
 class PretrainedModel(nn.Module):
     def __init__(self, args):
         super(PretrainedModel, self).__init__()
-        if args.model_name_or_path == 'roberta-large':
+        if args.model_name_or_path == 'bert':
+            self.model = BertModel.from_pretrained("bert-base-uncased ", output_hidden_states=True)
+        elif args.model_name_or_path == 'roberta-large':
             self.model = RobertaModel.from_pretrained("roberta-large", output_hidden_states=True)
         elif args.model_name_or_path == 'simcse':
             self.model = AutoModel.from_pretrained("princeton-nlp/sup-simcse-roberta-large")
+        elif args.model_name_or_path == 'sbert':
+            self.model = AutoModel.from_pretrained("sentence-transformers/all-MiniLM-L6-v2")
 
         self.config = self.model.config
         self.config.freeze_adapter = args.freeze_adapter

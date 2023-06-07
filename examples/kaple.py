@@ -142,7 +142,7 @@ def main():
     name_prefix = str(args.comment)
     args.my_model_name = name_prefix
     args.output_dir = os.path.join(args.output_dir, name_prefix)
-    assert args.loss in ['bce', 'mse']
+    # assert args.loss in ['bce', 'mse']
     assert not (args.meta_fac_adaptermodel and args.meta_et_adaptermodel and args.meta_lin_adaptermodel)
 
     if os.path.exists(args.output_dir) and os.listdir(args.output_dir) and args.do_train and not args.overwrite_output_dir:
@@ -296,7 +296,9 @@ def main():
         else:
             args.train_steps = int(args.num_train_epochs * len(train_examples) // args.train_batch_size)
             num_train_optimization_steps = args.train_steps
-        
+
+        batch_size = batch_size=args.train_batch_size // args.gradient_accumulation_steps
+
         if args.mode == "cross":
             all_input_ids = torch.tensor([f.input_ids for f in train_features], dtype=torch.long)
             all_input_mask = torch.tensor([f.input_mask for f in train_features], dtype=torch.long)
@@ -307,7 +309,7 @@ def main():
                 train_sampler = RandomSampler(train_data)
             else:
                 train_sampler = DistributedSampler(train_data)
-            batch_size = batch_size=args.train_batch_size // args.gradient_accumulation_steps
+            
             train_dataloader = DataLoader(train_data, sampler=train_sampler,
                                         batch_size=batch_size)
         elif args.mode == "bi":
@@ -324,7 +326,6 @@ def main():
             claim_all_label = torch.tensor([f.label for f in train_claim_features], dtype=torch.float32)
             train_claim_data = TensorDataset(claim_all_input_ids, claim_all_input_mask, claim_all_segment_ids, claim_all_label)
     
-            batch_size = batch_size=args.train_batch_size // args.gradient_accumulation_steps
             train_prior_dataloader = DataLoader(train_prior_data, batch_size=batch_size)
             train_claim_dataloader = DataLoader(train_claim_data, batch_size=batch_size)
 
@@ -396,7 +397,7 @@ def main():
                 label_ids = label_ids.to('cpu').numpy()
 
                 if args.n_gpu > 1:
-                    loss = loss.mean() + Loss.mean()  # mean() to average on multi-gpu.
+                    loss = loss.mean()  # mean() to average on multi-gpu.
                 if args.fp16 and args.loss_scale != 1.0:
                     loss = loss * args.loss_scale
                 if args.gradient_accumulation_steps > 1:

@@ -16,6 +16,7 @@ curPath = os.path.abspath(os.path.dirname(__file__))
 rootPath = os.path.split(curPath)[0]
 sys.path.append(rootPath)
 from pytorch_transformers.tokenization_roberta import RobertaTokenizer
+from pytorch_transformers.tokenization_bert import BertTokenizer
 from transformers import AutoTokenizer
 from itertools import cycle
 from pytorch_transformers import AdamW, WarmupLinearSchedule
@@ -35,7 +36,7 @@ def main():
     parser.add_argument("--data_dir", default=None, type=str, required=True,
                         help="The input data dir. Should contain the .tsv files (or other data files) for the task.")
     parser.add_argument("--model_name_or_path", default=None, type=str, required=True,
-                        help="Path to pre-trained model or shortcut name selected in the list: roberta-large, simcse")
+                        help="Path to pre-trained model or shortcut name selected in the list: bert, roberta-large, simcse, sbert")
     parser.add_argument("--comment", default='', type=str,
                         help="The comment")
     parser.add_argument("--output_dir", default=None, type=str, required=True,
@@ -141,7 +142,15 @@ def main():
     if args.local_rank not in [-1, 0]:
         torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
     
-    tokenizer = AutoTokenizer.from_pretrained("princeton-nlp/sup-simcse-roberta-large")
+    if args.model_name_or_path == 'bert':
+        tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+    elif args.model_name_or_path == 'roberta-large':
+        tokenizer = RobertaTokenizer.from_pretrained('roberta-large')
+    elif args.model_name_or_path == 'simcse':
+        tokenizer = AutoTokenizer.from_pretrained("princeton-nlp/sup-simcse-roberta-large")
+    elif args.model_name_or_path == 'sbert':
+        tokenizer = AutoTokenizer.from_pretrained("sentence-transformers/all-MiniLM-L6-v2")
+    
     pretrained_model = PretrainedModel(args)
 
     if args.local_rank == 0:
@@ -229,13 +238,6 @@ def main():
         hidden_size = pretrained_model.config.hidden_size
         if args.n_gpu > 1:
             pretrained_model = torch.nn.DataParallel(pretrained_model)
-
-        # Distributed training (should be after apex fp16 initialization)
-        # if args.local_rank != -1:
-        #     pretrained_model = torch.nn.parallel.DistributedDataParallel(pretrained_model, device_ids=[args.local_rank],
-        #                                                                 output_device=args.local_rank,
-        #                                                                 find_unused_parameters=True)
-
 
         logger.info("***** Running training *****")
         logger.info("  Num examples = %d", len(train_examples))

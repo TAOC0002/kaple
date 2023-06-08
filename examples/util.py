@@ -20,7 +20,7 @@ from pytorch_transformers import RobertaModel, BertModel
 from info_nce import InfoNCE
 
 class EarlyStopping():
-    def __init__(self, tolerance=5, min_delta=0, min_steps=22):
+    def __init__(self, tolerance=5, min_delta=0, min_steps=200):
 
         self.tolerance = tolerance
         self.min_delta = min_delta
@@ -29,8 +29,8 @@ class EarlyStopping():
         self.counter = 0
         self.early_stop = False
 
-    def __call__(self, eval_acc, best_eval_acc):
-        if (best_eval_acc - eval_acc) > self.min_delta and self.step > self.min_steps:
+    def __call__(self, eval, best_eval):
+        if (best_eval - eval) > self.min_delta and self.step > self.min_steps:
             self.counter +=1
             if self.counter >= self.tolerance:  
                 self.early_stop = True
@@ -542,9 +542,9 @@ class patentModel(nn.Module):
             sequence_output = combine_features
 
         if labels is not None or pseudo_labels is not None or labelling:
+            sigmoid = Sigmoid()
             if self.loss == "bce":
                 loss_fct = BCELoss()
-                sigmoid = Sigmoid()
             elif self.loss == "mse":
                 loss_fct = MSELoss()
 
@@ -568,6 +568,8 @@ class patentModel(nn.Module):
                 if self.loss == "bce":
                     loss = loss_fct(sigmoid(outputs), labels) + loss_fct(sigmoid(fac_outputs), labels)
                 elif self.loss == "mse":
+                    outputs = self.args.score_range*sigmoid(outputs)
+                    fac_outputs = self.args.score_range*sigmoid(fac_outputs)
                     loss = loss_fct(outputs, labels) + loss_fct(fac_outputs, labels)
             else:
                 if self.loss == "bce":
@@ -577,7 +579,11 @@ class patentModel(nn.Module):
             return (loss, outputs, fac_outputs)
         
         elif not labels and not pseudo_labels:
+            if self.args.loss == 'mse':
+                sequence_output = self.args.score_range*sigmoid(sequence_output)
+                fac_adapter_outputs = self.args.score_range*sigmoid(fac_adapter_outputs)
             if self.args.optimize_et_loss == True and self.et_adapter is not None:
+                et_adapter_outputs = self.args.score_range*sigmoid(et_adapter_outputs)
                 return sequence_output, fac_adapter_outputs, et_adapter_outputs
             return sequence_output, fac_adapter_outputs
 

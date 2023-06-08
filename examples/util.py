@@ -12,6 +12,7 @@ from sklearn.metrics import auc as _auc, roc_curve
 from transformers import AutoModel
 import json
 import sys
+import pandas as pd
 curPath = os.path.abspath(os.path.dirname(__file__))
 rootPath = os.path.split(curPath)[0]
 sys.path.append(rootPath)
@@ -101,6 +102,21 @@ def read_examples_origin(input_file, is_training):
             )
     return examples
 
+def read_sts_examples(input_file, is_training):
+    data = pd.read_csv(input_file, sep='\t', header=None)
+    no_examples = data.shape[0]
+    examples = []
+    for no in range(no_examples): 
+        label, text_a, text_b = data.iloc[no, :]
+        examples.append(
+            Example(
+                index=no+1,
+                prior=text_a,
+                claim=text_b,
+                label=label if is_training else None
+            )
+        )
+    return examples
 
 def tokens_to_ids(tokenizer, tokens, max_seq_length):
     # segment_ids = [0] * (len(prior) + 1) + [1] * (len(claim) + 1) + [2]

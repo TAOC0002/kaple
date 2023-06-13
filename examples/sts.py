@@ -660,7 +660,6 @@ def main():
                                 writer.write("%s = %s\n" % (key, str(result[key])))
                             writer.write('*' * 80)
                             writer.write('\n')
-
                         if eval_spearmanr > best_spearmanr:
                             print("=" * 80)
                             print("Best Spearman score", eval_spearmanr)

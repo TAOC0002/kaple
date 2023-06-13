@@ -77,13 +77,6 @@ def train(args, train_dataset, val_dataset, model, tokenizer):
         pretrained_model = torch.nn.DataParallel(pretrained_model)
         adapter_model = torch.nn.DataParallel(adapter_model)
 
-    # Distributed training (should be after apex fp16 initialization)
-    if args.local_rank != -1:
-        pretrained_model = torch.nn.parallel.DistributedDataParallel(pretrained_model, device_ids=[args.local_rank],
-                                                          output_device=args.local_rank)
-        adapter_model = torch.nn.parallel.DistributedDataParallel(adapter_model, device_ids=[args.local_rank],
-                                                          output_device=args.local_rank)
-
     # Train!
     logger.info("***** Running training *****")
     logger.info("  Num train examples = %d",

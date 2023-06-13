@@ -20,8 +20,8 @@ from pytorch_transformers.tokenization_bert import BertTokenizer
 from transformers import AutoTokenizer
 from itertools import cycle
 from pytorch_transformers import AdamW, WarmupLinearSchedule
-from util import EarlyStopping, read_examples_origin, convert_examples_to_features, accuracy, infonce
-from util import sigmoid, auc, set_seed, PretrainedModel, AdapterModel, patentModel, load_pretrained_adapter, cosine_sim
+from util import EarlyStopping, read_examples_origin, read_sts_examples, convert_examples_to_features
+from util import sigmoid, auc, set_seed, PretrainedModel, AdapterModel, patentModel, load_pretrained_adapter, cosine_sim, accuracy
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
                     datefmt='%m/%d/%Y %H:%M:%S',
@@ -165,10 +165,12 @@ def main():
     args.eval_batch_size = args.per_gpu_eval_batch_size * max(1, args.n_gpu)
 
     read_examples_dict = {
-        'read_examples_origin': read_examples_origin
+        'read_examples_origin': read_examples_origin,
+        'read_sts_examples': read_sts_examples
     }
     convert_examples_to_features_dict = {
-        'read_examples_origin': convert_examples_to_features
+        'read_examples_origin': convert_examples_to_features,
+        'read_sts_examples': convert_examples_to_features
     }
 
     early_stopping = EarlyStopping()

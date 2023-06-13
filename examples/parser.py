@@ -3,6 +3,10 @@ def parse(parser):
     # Parse and set parameters
     parser.add_argument("--data_dir", default=None, type=str, required=True,
                         help="The input data dir. Should contain the .tsv files for the task.")
+    parser.add_argument("--year", default=None, type=str, required=True,
+                        help="Up to which year the sts datasets are constrcuted")
+    parser.add_argument("--optimze_et_loss", default=False, type=bool,
+                        help="optimze the loss of the second adapter.")
     parser.add_argument("--output_dir", default=None, type=str, required=True,
                         help="The output directory where the model predictions and checkpoints will be written. The directory will be created if it doesn't exist.")
     parser.add_argument("--output_folder", default=None, type=str, required=True,

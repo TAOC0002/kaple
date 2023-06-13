@@ -5,7 +5,7 @@ batch=8
 accu=4
 lr=5e-6
 GPU='2'
-CUDA_VISIBLE_DEVICES=$GPU python examples/simcse.py \
+CUDA_VISIBLE_DEVICES=$GPU python ../examples/simcse.py \
 --model_name_or_path bert \
 --data_dir data/patent-sim-compact \
 --preprocess_type read_examples_origin \

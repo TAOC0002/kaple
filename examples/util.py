@@ -20,7 +20,7 @@ from pytorch_transformers import RobertaModel, BertModel
 from info_nce import InfoNCE
 
 class EarlyStopping():
-    def __init__(self, tolerance=5, min_delta=0, min_steps=22):
+    def __init__(self, tolerance=5, min_delta=0, min_steps=200):
 
         self.tolerance = tolerance
         self.min_delta = min_delta
@@ -29,8 +29,8 @@ class EarlyStopping():
         self.counter = 0
         self.early_stop = False
 
-    def __call__(self, eval_acc, best_eval_acc):
-        if (best_eval_acc - eval_acc) > self.min_delta and self.step > self.min_steps:
+    def __call__(self, eval, best_eval):
+        if (best_eval - eval) > self.min_delta and self.step > self.min_steps:
             self.counter +=1
             if self.counter >= self.tolerance:  
                 self.early_stop = True
@@ -103,11 +103,12 @@ def read_examples_origin(input_file, is_training):
     return examples
 
 def read_sts_examples(input_file, is_training):
-    data = pd.read_csv(input_file, sep='\t', header=None)
+    data = pd.read_csv(input_file, sep='\t', header=None, error_bad_lines=False)
     no_examples = data.shape[0]
     examples = []
     for no in range(no_examples): 
         label, text_a, text_b = data.iloc[no, :]
+        assert label is not np.nan
         examples.append(
             Example(
                 index=no+1,
@@ -136,7 +137,7 @@ def tokens_to_ids(tokenizer, tokens, max_seq_length):
     return input_ids, input_mask, segment_ids
 
 def convert_examples_to_features(examples, tokenizer, max_seq_length,
-                                 mode, logger, is_training=True, verbose=False):
+                                 mode, logger, is_training=True, verbose=False, label_type='classification'):
     features = []
     prior_features, claim_features = [], []
     for example_index, example in enumerate(examples):
@@ -150,7 +151,11 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
         if mode == "cross":
             tokens = ['<s>'] + prior + ["</s>"] + claim + ["</s>"]
             input_ids, input_mask, segment_ids = tokens_to_ids(tokenizer, tokens, max_seq_length)
-            label = int(example.label) if example.label is not None else None
+            if label_type == 'classification':
+                label = int(example.label) if example.label is not None else None
+            elif label_type == 'regression':
+                label = float(example.label) if example.label is not None else None
+
             features.append(
                 InputFeatures(
                     example_id=example.index,
@@ -164,7 +169,11 @@ def convert_examples_to_features(examples, tokenizer, max_seq_length,
         elif mode == "bi":
             prior_input_ids, prior_input_mask, prior_segment_ids = tokens_to_ids(tokenizer, ['<s>'] + prior, max_seq_length)
             claim_input_ids, claim_input_mask, claim_segment_ids = tokens_to_ids(tokenizer, ['<s>'] + claim, max_seq_length)
-            label = int(example.label) if example.label is not None else None
+            if label_type == 'classification':
+                label = int(example.label) if example.label is not None else None
+            elif label_type == 'regression':
+                label = float(example.label) if example.label is not None else None
+                
             prior_features.append(
                 InputFeatures(
                     example_id=example.index,
@@ -480,8 +489,9 @@ class patentModel(nn.Module):
         self.loss = loss
 
     def forward(self, pretrained_model_outputs, labels=None, pseudo_labels=None, pseudo_fac_labels=None, labelling=False):
-        fac_adapter_outputs = torch.rand(8,50,20)
-        et_adapter_outputs = torch.rand(8,50,20)
+        batch_size = self.args.train_batch_size // self.args.gradient_accumulation_steps
+        fac_adapter_outputs = torch.rand(batch_size, self.args.max_seq_length, self.config.hidden_size).to(self.args.device)
+        et_adapter_outputs = torch.rand(batch_size, self.args.max_seq_length, self.config.hidden_size).to(self.args.device)
         pretrained_model_last_hidden_states = pretrained_model_outputs[0]
         if self.fac_adapter is not None:
             fac_adapter_outputs, _ = self.fac_adapter(pretrained_model_outputs)
@@ -541,10 +551,10 @@ class patentModel(nn.Module):
         else:
             sequence_output = combine_features
 
+        sigmoid = Sigmoid()
         if labels is not None or pseudo_labels is not None or labelling:
             if self.loss == "bce":
                 loss_fct = BCELoss()
-                sigmoid = Sigmoid()
             elif self.loss == "mse":
                 loss_fct = MSELoss()
 
@@ -568,7 +578,11 @@ class patentModel(nn.Module):
                 if self.loss == "bce":
                     loss = loss_fct(sigmoid(outputs), labels) + loss_fct(sigmoid(fac_outputs), labels)
                 elif self.loss == "mse":
-                    loss = loss_fct(outputs, labels) + loss_fct(fac_outputs, labels)
+                    outputs = self.args.score_range*sigmoid(outputs)
+                    loss = loss_fct(outputs, labels) 
+                    if self.args.meta_fac_adaptermodel is not '':
+                        fac_outputs = self.args.score_range*sigmoid(fac_outputs)
+                        loss += loss_fct(fac_outputs, labels)
             else:
                 if self.loss == "bce":
                     loss = loss_fct(sigmoid(outputs), pseudo_labels) + loss_fct(sigmoid(fac_outputs), pseudo_fac_labels)
@@ -577,7 +591,11 @@ class patentModel(nn.Module):
             return (loss, outputs, fac_outputs)
         
         elif not labels and not pseudo_labels:
+            if self.args.loss == 'mse':
+                sequence_output = self.args.score_range*sigmoid(sequence_output)
+                fac_adapter_outputs = self.args.score_range*sigmoid(fac_adapter_outputs)
             if self.args.optimize_et_loss == True and self.et_adapter is not None:
+                et_adapter_outputs = self.args.score_range*sigmoid(et_adapter_outputs)
                 return sequence_output, fac_adapter_outputs, et_adapter_outputs
             return sequence_output, fac_adapter_outputs
 

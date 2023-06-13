@@ -142,7 +142,7 @@ def main():
     name_prefix = str(args.comment)
     args.my_model_name = name_prefix
     args.output_dir = os.path.join(args.output_dir, name_prefix)
-    # assert args.loss in ['bce', 'mse']
+    assert args.loss in ['bce', 'infonce']
     assert not (args.meta_fac_adaptermodel and args.meta_et_adaptermodel and args.meta_lin_adaptermodel)
 
     if os.path.exists(args.output_dir) and os.listdir(args.output_dir) and args.do_train and not args.overwrite_output_dir:

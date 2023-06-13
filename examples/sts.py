@@ -20,8 +20,8 @@ from pytorch_transformers.tokenization_roberta import RobertaTokenizer
 from transformers import AutoTokenizer
 from itertools import cycle
 from pytorch_transformers import AdamW, WarmupLinearSchedule
-from util import EarlyStopping, read_sts_examples, convert_examples_to_features, accuracy, infonce
-from util import sigmoid, auc, set_seed, PretrainedModel, AdapterModel, patentModel, load_pretrained_adapter, cosine_sim
+from util import EarlyStopping, read_sts_examples, convert_examples_to_features
+from util import sigmoid, set_seed, PretrainedModel, AdapterModel, patentModel, load_pretrained_adapter, cosine_sim
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
                     datefmt='%m/%d/%Y %H:%M:%S',
@@ -35,19 +35,22 @@ def main():
     ## Required parameters
     parser.add_argument("--data_dir", default=None, type=str, required=True,
                         help="The input data dir. Should contain the .tsv files (or other data files) for the task.")
+    parser.add_argument("--year", default=None, type=str, required=True,
+                        help="Up to which year the sts datasets are constrcuted")
     parser.add_argument("--model_name_or_path", default=None, type=str, required=True,
                         help="Path to pre-trained model or shortcut name selected in the list: roberta-large, simcse")
-    parser.add_argument("--comment", default='', type=str,
-                        help="The comment")
     parser.add_argument("--output_dir", default=None, type=str, required=True,
                         help="The output directory where the model predictions and checkpoints will be written.")
-    parser.add_argument("--score_range", default=5, type=str,
-                        help="Range of the STS scores.")
+    parser.add_argument("--comment", default='', type=str, help="The comment")
+    parser.add_argument("--score_range", default=5, type=int, help="Range of the STS scores.")
+    parser.add_argument("--min_steps", default=10, type=int, help="Minimum steps to enable early stopping.")
 
     parser.add_argument("--freeze_bert", default=False, type=bool,
                         help="freeze the parameters of pretrained model.")
     parser.add_argument("--freeze_adapter", default=False, type=bool,
                         help="freeze the parameters of adapter.")
+    parser.add_argument("--optimze_et_loss", default=False, type=bool,
+                        help="optimze the loss of the second adapter.")
 
     parser.add_argument('--fusion_mode', type=str, default='concat',help='the fusion mode for bert feautre (and adapter feature) |add|concat|attentiom')
     parser.add_argument("--adapter_transformer_layers", default=2, type=int,
@@ -115,7 +118,7 @@ def main():
                         help="Rate of pre-trained LM loss")
     parser.add_argument('--b_rate', type=float, default=0.5,
                         help="Rate of adapter loss")
-    parser.add_argument('--metrics', type=str, default='accuracy',
+    parser.add_argument('--metrics', type=str, default='spearmanr',
                         help="Metrics to determine the best model")
     parser.add_argument('--mode', type=str, default='cross',
                         help="Either one of cross-encoder (cross) or bi-coder (bi)")
@@ -123,8 +126,8 @@ def main():
                         help="Whether to apply normalization before cosine similarity measurement in the bi-encoder setting")
     parser.add_argument('--pooling', type=str, default='cls',
                         help="Pooling scheme. Input one of (mean, cls)")
-    parser.add_argument('--loss', type=str, default='bce',
-                        help="Loss function. Input one of (bce, infonce, mse)")
+    parser.add_argument('--loss', type=str, default='mse',
+                        help="Loss function. Defaults to mse")
     parser.add_argument('--sim_measure', type=str, default='cosine',
                         help="Similarity measure, used only when mode = 'bi'. Input one of (cosine, linear_transform)")
     parser.add_argument("--do_train", action='store_true',
@@ -145,8 +148,7 @@ def main():
     name_prefix = str(args.comment)
     args.my_model_name = name_prefix
     args.output_dir = os.path.join(args.output_dir, name_prefix)
-    # assert args.loss in ['bce', 'mse']
-    assert not (args.meta_fac_adaptermodel and args.meta_et_adaptermodel and args.meta_lin_adaptermodel)
+    # assert not (args.meta_fac_adaptermodel and args.meta_et_adaptermodel and args.meta_lin_adaptermodel)
 
     if os.path.exists(args.output_dir) and os.listdir(args.output_dir) and args.do_train and not args.overwrite_output_dir:
         raise ValueError("Output directory ({}) already exists and is not empty. Use --overwrite_output_dir to overcome.".format(args.output_dir))
@@ -215,11 +217,6 @@ def main():
         lin_adapter = load_pretrained_adapter(lin_adapter,args.meta_lin_adaptermodel)
     else:
         lin_adapter = None
-    if args.meta_et_adaptermodel:
-        et_adapter = AdapterModel(args, pretrained_model.config)
-        et_adapter = load_pretrained_adapter(et_adapter,args.meta_et_adaptermodel)
-    else:
-        et_adapter = None
     patent_model = patentModel(args, pretrained_model.config, fac_adapter=fac_adapter, lin_adapter=lin_adapter, et_adapter=et_adapter, max_seq_length=args.max_seq_length, pooling=args.pooling, loss=args.loss)
 
     # From a pre-trained checkpoint of roberta-large
@@ -283,16 +280,16 @@ def main():
         'read_sts_examples': convert_examples_to_features
     }
 
-    early_stopping = EarlyStopping()
+    early_stopping = EarlyStopping(min_steps=args.min_steps)
 
     if args.do_train:
         # Prepare data loader
         if args.local_rank in [-1, 0]:
             tb_writer = SummaryWriter(log_dir="runs/" + args.my_model_name)
-        train_examples = read_examples_dict[args.preprocess_type](os.path.join(args.data_dir, 'train.jsonl'),
+        train_examples = read_examples_dict[args.preprocess_type](os.path.join(args.data_dir, args.year + '.train.tsv'),
                                                                   is_training=True)
         train_features = convert_examples_to_features_dict[args.preprocess_type](
-            train_examples, tokenizer, args.max_seq_length, args.mode, logger, is_training=True)
+            train_examples, tokenizer, args.max_seq_length, args.mode, logger, is_training=True, label_type='regression')
         
         if args.train_steps > 0:
             num_train_optimization_steps = args.train_steps
@@ -300,7 +297,7 @@ def main():
             args.train_steps = int(args.num_train_epochs * len(train_examples) // args.train_batch_size)
             num_train_optimization_steps = args.train_steps
 
-        batch_size = batch_size=args.train_batch_size // args.gradient_accumulation_steps
+        batch_size = args.train_batch_size // args.gradient_accumulation_steps
 
         if args.mode == "cross":
             all_input_ids = torch.tensor([f.input_ids for f in train_features], dtype=torch.long)
@@ -365,7 +362,7 @@ def main():
                 pretrained_model = torch.nn.DataParallel(pretrained_model)
                 patent_model = torch.nn.DataParallel(patent_model)
 
-        best_acc, best_auc = 0, 0
+        best_spearmanr, best_personr = 0, 0
         if args.freeze_bert:
             pretrained_model.eval()
         else:
@@ -373,8 +370,6 @@ def main():
         patent_model.train()
         tr_loss, logging_loss = 0.0, 0.0
         nb_tr_examples, nb_tr_steps = 0, 0
-
-        train_accuracy = 0  # accumulative accuracy
 
         bar = tqdm(range(num_train_optimization_steps), total=num_train_optimization_steps)
         if args.mode == "cross":
@@ -410,18 +405,10 @@ def main():
                 train_loss = round(tr_loss * args.gradient_accumulation_steps / (nb_tr_steps + 1), 4)
                 bar.set_description("loss {}".format(train_loss))
 
-                train_accuracy += accuracy(output_logits, label_ids)
-                # np.sum((sigmoid(out) > 0.5) == true_labels)
-                if args.logging_steps > 0 and global_step % args.logging_steps == 0 and (nb_tr_steps + 1) % args.gradient_accumulation_steps == 1:
-                    output_logits_auc = output_logits.copy()
-                    label_ids_auc = label_ids.copy()
-                else:    
-                    output_logits_auc = np.concatenate((output_logits_auc, output_logits), axis=0)
-                    label_ids_auc = np.concatenate((label_ids_auc, label_ids), axis=0)
                 nb_tr_examples += input_ids.size(0)
                 nb_tr_steps += 1
 
-            elif args.mode == "bi":
+            if args.mode == "bi":
                 prior_batch = next(train_prior_dataloader)
                 claim_batch = next(train_claim_dataloader)
                 prior_batch = tuple(t.to(device) for t in prior_batch)
@@ -441,17 +428,8 @@ def main():
                     claim_output_logits, claim_fac_logits, claim_et_logits = patent_model(claim_pretrained_model_outputs)
                 else:
                     claim_output_logits, claim_fac_logits = patent_model(claim_pretrained_model_outputs)
-
-                if args.pooling == "mean":
-                    prior_vectors = torch.mean(prior_output_logits, dim=2)
-                    claim_vectors = torch.mean(claim_output_logits, dim=2)
-                    prior_fac_vectors = torch.mean(prior_fac_logits, dim=2)
-                    claim_fac_vectors = torch.mean(claim_fac_logits, dim=2)
-                    if args.optimize_et_loss:
-                        prior_et_vectors = torch.mean(prior_et_logits, dim=2)
-                        claim_et_vectors = torch.mean(claim_et_logits, dim=2)
                 
-                elif args.pooling == "cls":
+                if args.pooling == "cls":
                     prior_vectors = prior_output_logits[:,0,:]
                     claim_vectors = claim_output_logits[:,0,:]
                     prior_fac_vectors = prior_fac_logits[:,0,:]
@@ -468,25 +446,12 @@ def main():
                         et_cosines = cosine_sim(prior_et_vectors, claim_et_vectors, args.normalize, device)
 
                 labels = label_ids.unsqueeze(dim=1)
-                if args.loss == "bce":
-                    loss = loss_fct(sigmoid(cosines), labels)
+                if args.loss == "mse":
+                    loss = loss_fct(args.score_range*sigmoid(cosines), labels)
                     if args.meta_fac_adaptermodel:
-                        loss += loss_fct(sigmoid(fac_cosines), labels)
-                    if args.meta_et_adaptermodel and args.optimize_et_loss:
-                        loss += loss_fct(sigmoid(et_cosines), labels)
-                        
-                elif args.loss == "infonce":
-                    if args.meta_fac_adaptermodel:
-                        loss = infonce(prior_vectors, claim_vectors, labels, prior_fac_vectors, claim_fac_vectors)
-                    else:
-                        loss = infonce(prior_vectors, claim_vectors, labels)
-
-                elif args.loss == "mse":
-                    loss = loss_fct(args.score_range*cosines, labels)
-                    if args.meta_fac_adaptermodel:
-                        loss += loss_fct(args.score_range*fac_cosines, labels)
+                        loss += loss_fct(args.score_range*sigmoid(fac_cosines), labels)
                     if args.meta_et_adaptermodel and args.optimze_et_loss:
-                        loss += loss_fct(args.score_range*et_cosines, labels)
+                        loss += loss_fct(args.score_range*sigmoid(et_cosines), labels)
 
                 if args.n_gpu > 1:
                     loss = loss.mean()  # mean() to average on multi-gpu.
@@ -501,7 +466,6 @@ def main():
 
                 output_logits = cosines.detach().cpu().numpy()
                 label_ids = label_ids.to('cpu').numpy()
-                train_accuracy += accuracy(output_logits, label_ids, logits=False)
 
                 nb_tr_examples += prior_input_ids.size(0)
                 nb_tr_steps += 1
@@ -529,12 +493,12 @@ def main():
 
             if args.do_eval and ((global_step + 1) % args.eval_steps == 0) and eval_flag:
                 eval_flag = False
-                for file in ['valid.jsonl']:
+                for file in [args.year + '.val.tsv']:
 
                     eval_examples = read_examples_dict[args.preprocess_type](os.path.join(args.data_dir, file),
                                                                              is_training=True)
                     eval_features = convert_examples_to_features_dict[args.preprocess_type](
-                        eval_examples, tokenizer, args.max_seq_length, args.mode, logger, is_training=True)
+                        eval_examples, tokenizer, args.max_seq_length, args.mode, logger, is_training=True, label_type='regression')
 
                     if args.mode == "cross":
                         all_input_ids = torch.tensor([f.input_ids for f in eval_features], dtype=torch.long)
@@ -566,7 +530,7 @@ def main():
 
                     pretrained_model.eval()
                     patent_model.eval()
-                    eval_loss, eval_accuracy = 0, 0
+                    eval_loss = 0
                     nb_eval_steps, nb_eval_examples = 0, 0
 
                     if args.mode == "cross":
@@ -584,18 +548,16 @@ def main():
 
                             logits = logits.detach().cpu().numpy()
                             label_ids = label_ids.to('cpu').numpy()
-                            tmp_eval_accuracy = accuracy(logits, label_ids)
                             eval_loss += tmp_eval_loss.item()
-                            eval_accuracy += tmp_eval_accuracy
                             
                             nb_eval_steps += 1
                             nb_eval_examples += input_ids.size(0)
                             if nb_eval_steps == 1:
-                                logits_auc_ = logits.copy()
-                                label_ids_auc_ = label_ids.copy()
+                                inference = logits.copy()
+                                gold = label_ids.copy()
                             else:
-                                logits_auc_ = np.concatenate((logits_auc_, logits), axis=0)
-                                label_ids_auc_ = np.concatenate((label_ids_auc_, label_ids), axis=0)
+                                inference = np.concatenate((inference, logits), axis=0)
+                                gold = np.concatenate((gold, label_ids), axis=0)
 
                     elif args.mode == "bi":
                         for prior_input_ids, prior_input_mask, prior_segment_ids, label_ids in eval_prior_dataloader:
@@ -620,17 +582,8 @@ def main():
                                     claim_output_logits, claim_fac_logits, claim_et_logits = patent_model(claim_pretrained_model_outputs)
                                 else:
                                     claim_output_logits, claim_fac_logits = patent_model(claim_pretrained_model_outputs)
-
-                                if args.pooling == "mean":
-                                    prior_vectors = torch.mean(prior_output_logits, dim=2)
-                                    claim_vectors = torch.mean(claim_output_logits, dim=2)
-                                    prior_fac_vectors = torch.mean(prior_fac_logits, dim=2)
-                                    claim_fac_vectors = torch.mean(claim_fac_logits, dim=2)
-                                    if args.optimize_et_loss:
-                                        prior_et_vectors = torch.mean(prior_et_logits, dim=2)
-                                        claim_et_vectors = torch.mean(claim_et_logits, dim=2)
                                 
-                                elif args.pooling == "cls":
+                                if args.pooling == "cls":
                                     prior_vectors = prior_output_logits[:,0,:]
                                     claim_vectors = claim_output_logits[:,0,:]
                                     prior_fac_vectors = prior_fac_logits[:,0,:]
@@ -647,64 +600,54 @@ def main():
                                         et_cosines = cosine_sim(prior_et_vectors, claim_et_vectors, args.normalize, device)
 
                                 labels = label_ids.unsqueeze(dim=1)
-                                if args.loss == "bce":
-                                    loss = loss_fct(sigmoid(cosines), labels)
-                                    if args.meta_fac_adaptermodel:
-                                        loss += loss_fct(sigmoid(fac_cosines), labels)
-                                    if args.meta_et_adaptermodel and args.optimize_et_loss:
-                                        loss += loss_fct(sigmoid(et_cosines), labels)
-                                        
-                                elif args.loss == "infonce":
-                                    if args.meta_fac_adaptermodel:
-                                        loss = infonce(prior_vectors, claim_vectors, labels, prior_fac_vectors, claim_fac_vectors)
-                                    else:
-                                        loss = infonce(prior_vectors, claim_vectors, labels)
 
-                                elif args.loss == "mse":
-                                    loss = loss_fct(args.score_range*cosines, labels)
+                                if args.loss == "mse":
+                                    cosines = args.score_range*sigmoid(cosines)
+                                    loss = loss_fct(cosines, labels)
                                     if args.meta_fac_adaptermodel:
-                                        loss += loss_fct(args.score_range*fac_cosines, labels)
+                                        loss += loss_fct(args.score_range*sigmoid(fac_cosines), labels)
                                     if args.meta_et_adaptermodel and args.optimze_et_loss:
-                                        loss += loss_fct(args.score_range*et_cosines, labels)
+                                        loss += loss_fct(args.score_range*sigmoid(et_cosines), labels)
 
                                 eval_loss += loss
 
                                 output_logits = cosines.detach().cpu().numpy()
                                 label_ids = label_ids.to('cpu').numpy()
-                                eval_accuracy += accuracy(output_logits, label_ids, logits=False)
 
                             nb_eval_steps += 1
                             nb_eval_examples += prior_input_ids.size(0)
                             if nb_eval_steps == 1:
-                                logits_auc_ = output_logits.copy()
-                                label_ids_auc_ = label_ids.copy()
+                                inference = output_logits.copy()
+                                gold = label_ids.copy()
                             else:
-                                logits_auc_ = np.concatenate((logits_auc_, output_logits), axis=0)
-                                label_ids_auc_ = np.concatenate((label_ids_auc_, label_ids), axis=0)
+                                inference = np.concatenate((inference, output_logits), axis=0)
+                                gold = np.concatenate((gold, label_ids), axis=0)
 
                     eval_loss = eval_loss / nb_eval_steps
-                    eval_accuracy = eval_accuracy / nb_eval_examples
+
                     if args.local_rank in [-1, 0]:
                         logger.info("***** Running training *****")
                         logger.info("  Num examples = %d", len(train_examples))
                         logger.info("  Batch size = %d", args.train_batch_size)
                         logger.info("  Num steps = %d", num_train_optimization_steps)
 
-                        if args.mode == "cross":
-                            eval_auc = auc(logits_auc_, label_ids_auc_)
-                        elif args.mode == "bi":
-                            eval_auc = auc(logits_auc_, label_ids_auc_, logits=False)
+                        eval_spearmanr = spearmanr(np.squeeze(inference), gold)[0]
+                        eval_pearsonr = pearsonr(np.squeeze(inference), gold)[0]
 
                         if args.mode == "bi":
                             eval_loss = eval_loss.item()
+                        
+                        early_stopping(eval_spearmanr, best_spearmanr)
+                        if early_stopping.early_stop:
+                            break
 
                         tb_writer.add_scalar('eval_loss', eval_loss, global_step)
-                        tb_writer.add_scalar('eval_accuracy', eval_accuracy, global_step)
-                        tb_writer.add_scalar('eval_auc', eval_auc, global_step)
+                        tb_writer.add_scalar('eval_spearmanr', eval_spearmanr, global_step)
+                        tb_writer.add_scalar('eval_pearsonr', eval_pearsonr, global_step)
                         
                         result = {'eval_loss': eval_loss,
-                                'eval_accuracy': eval_accuracy,
-                                'eval_auc': eval_auc,
+                                'eval_spearmanr': eval_spearmanr,
+                                'eval_pearsonr': eval_pearsonr,
                                 'global_step': global_step + 1,
                                 'loss': train_loss}
                        
@@ -718,27 +661,23 @@ def main():
                             writer.write('*' * 80)
                             writer.write('\n')
 
-                        if early_stopping.early_stop:
-                            break
-
-                        if args.metrics == 'spearmanr':
-                            if eval_accuracy > best_acc:
-                                print("=" * 80)
-                                print("Best Acc", eval_accuracy)
-                                print("Saving Model......")
-                                best_acc = eval_accuracy
-                                # Save a trained model
-                                model_to_save = patent_model.module if hasattr(patent_model,
-                                                                        'module') else patent_model  # Take care of distributed/parallel training
-                                output_model_file = os.path.join(args.output_dir, "pytorch_model_best.bin")
-                                torch.save(model_to_save.state_dict(), output_model_file)
-                                model_to_save = pretrained_model.module if hasattr(pretrained_model,
-                                                                                'module') else pretrained_model
-                                output_model_file = os.path.join(args.output_dir, "pytorch_bertmodel_best.bin")
-                                torch.save(model_to_save.state_dict(), output_model_file)
-                            else:
-                                print("=" * 80)
-                                print("Best Acc", best_acc)
+                        if eval_spearmanr > best_spearmanr:
+                            print("=" * 80)
+                            print("Best Spearman score", eval_spearmanr)
+                            print("Saving Model......")
+                            best_spearmanr = eval_spearmanr
+                            # Save a trained model
+                            model_to_save = patent_model.module if hasattr(patent_model,
+                                                                    'module') else patent_model  # Take care of distributed/parallel training
+                            output_model_file = os.path.join(args.output_dir, "pytorch_model_best.bin")
+                            torch.save(model_to_save.state_dict(), output_model_file)
+                            model_to_save = pretrained_model.module if hasattr(pretrained_model,
+                                                                            'module') else pretrained_model
+                            output_model_file = os.path.join(args.output_dir, "pytorch_bertmodel_best.bin")
+                            torch.save(model_to_save.state_dict(), output_model_file)
+                        else:
+                            print("=" * 80)
+                            print("Best Spearman score", best_spearmanr)
 
                 if args.freeze_bert:
                     pretrained_model.eval()
@@ -753,12 +692,12 @@ def main():
         pretrained_model.eval()
         patent_model.eval()
         print('test...')
-        for file in ['test.jsonl']:
+        for file in [args.year + '.test.tsv']:
 
             eval_examples = read_examples_dict[args.preprocess_type](os.path.join(args.data_dir, file),
                                                                         is_training=True)
             eval_features = convert_examples_to_features_dict[args.preprocess_type](
-                eval_examples, tokenizer, args.max_seq_length, args.mode, logger, is_training=True)
+                eval_examples, tokenizer, args.max_seq_length, args.mode, logger, is_training=True, label_type='regression')
             logger.info("***** Running evaluation *****")
             logger.info("  Num examples = %d", len(eval_examples))
             logger.info("  Batch size = %d", args.eval_batch_size)
@@ -793,7 +732,7 @@ def main():
 
             pretrained_model.eval()
             patent_model.eval()
-            eval_loss, eval_accuracy = 0, 0
+            eval_loss = 0
             nb_eval_steps, nb_eval_examples = 0, 0
 
             if args.mode == "cross":
@@ -811,18 +750,16 @@ def main():
 
                     logits = logits.detach().cpu().numpy()
                     label_ids = label_ids.to('cpu').numpy()
-                    tmp_eval_accuracy = accuracy(logits, label_ids)
                     eval_loss += tmp_eval_loss.item()
-                    eval_accuracy += tmp_eval_accuracy
                     
                     nb_eval_steps += 1
                     nb_eval_examples += input_ids.size(0)
                     if nb_eval_steps == 1:
-                        logits_auc_ = logits.copy()
-                        label_ids_auc_ = label_ids.copy()
+                        inference = logits.copy()
+                        gold = label_ids.copy()
                     else:
-                        logits_auc_ = np.concatenate((logits_auc_, logits), axis=0)
-                        label_ids_auc_ = np.concatenate((label_ids_auc_, label_ids), axis=0)
+                        inference = np.concatenate((inference, logits), axis=0)
+                        gold = np.concatenate((gold, label_ids), axis=0)
 
             elif args.mode == "bi":
                 for prior_input_ids, prior_input_mask, prior_segment_ids, label_ids in eval_prior_dataloader:
@@ -841,14 +778,8 @@ def main():
 
                         claim_pretrained_model_outputs = pretrained_model(input_ids=claim_input_ids, token_type_ids=claim_segment_ids, attention_mask=claim_input_mask)
                         claim_output_logits, claim_fac_logits = patent_model(claim_pretrained_model_outputs)
-
-                        if args.pooling == "mean":
-                            prior_vectors = torch.mean(prior_output_logits, dim=2)
-                            claim_vectors = torch.mean(claim_output_logits, dim=2)
-                            prior_fac_vectors = torch.mean(prior_fac_logits, dim=2)
-                            claim_fac_vectors = torch.mean(claim_fac_logits, dim=2)
                         
-                        elif args.pooling == "cls":
+                        if args.pooling == "cls":
                             prior_vectors = prior_output_logits[:,0,:]
                             claim_vectors = claim_output_logits[:,0,:]
                             prior_fac_vectors = prior_fac_logits[:,0,:]
@@ -861,58 +792,43 @@ def main():
 
                         labels = label_ids.unsqueeze(dim=1)
 
-                        if args.loss == "bce":
+                        if args.loss == "mse":
+                            loss_fct = MSELoss()
+                            cosines = args.score_range*sigmoid(cosines)
+                            loss = loss_fct(cosines, labels)
                             if args.meta_fac_adaptermodel:
-                                loss = loss_fct(sigmoid(cosines), labels) + loss_fct(sigmoid(fac_cosines), labels)
-                            else:
-                                loss = loss_fct(sigmoid(cosines), labels)
-                        elif args.loss == "infonce":
-                            if args.meta_fac_adaptermodel:
-                                loss = infonce(prior_vectors, claim_vectors, labels, prior_fac_vectors, claim_fac_vectors)
-                            else:
-                                loss = infonce(prior_vectors, claim_vectors, labels)
-                        elif args.loss == "mse":
-                            loss = loss_fct(args.score_range*cosines, labels)
-                            if args.meta_fac_adaptermodel:
-                                loss += loss_fct(args.score_range*fac_cosines, labels)
+                                loss += loss_fct(args.score_range*sigmoid(fac_cosines), labels)
                             if args.meta_et_adaptermodel and args.optimze_et_loss:
-                                loss += loss_fct(args.score_range*et_cosines, labels)
+                                loss += loss_fct(args.score_range*sigmoid(et_cosines), labels)
 
                         eval_loss += loss
-
                         output_logits = cosines.detach().cpu().numpy()
                         label_ids = label_ids.to('cpu').numpy()
-                        eval_accuracy += accuracy(output_logits, label_ids, logits=False)
 
                     nb_eval_steps += 1
                     nb_eval_examples += prior_input_ids.size(0)
                     if nb_eval_steps == 1:
-                        logits_auc_ = output_logits.copy()
-                        label_ids_auc_ = label_ids.copy()
+                        inference = output_logits.copy()
+                        gold = label_ids.copy()
                     else:
-                        logits_auc_ = np.concatenate((logits_auc_, output_logits), axis=0)
-                        label_ids_auc_ = np.concatenate((label_ids_auc_, label_ids), axis=0)
+                        inference = np.concatenate((inference, output_logits), axis=0)
+                        gold = np.concatenate((gold, label_ids), axis=0)
 
             eval_loss = eval_loss / nb_eval_steps
-            eval_accuracy = eval_accuracy / nb_eval_examples
             if args.local_rank in [-1, 0]:
-                if args.mode == "cross":
-                    eval_auc = auc(logits_auc_, label_ids_auc_)
-                elif args.mode == "bi":
-                    eval_auc = auc(logits_auc_, label_ids_auc_, logits=False)
+                eval_spearmanr = spearmanr(np.squeeze(inference), gold)[0]
+                eval_pearsonr = pearsonr(np.squeeze(inference), gold)[0]
 
                 if args.mode == "bi":
                     eval_loss = eval_loss.item()
-                
-                result = {'test_loss': eval_loss,
-                        'test_accuracy': eval_accuracy,
-                        'test_auc': eval_auc,
-                        'global_step': global_step + 1,
-                        'loss': train_loss}
+                        
+                result = {'eval_loss': eval_loss,
+                        'eval_spearmanr': eval_spearmanr,
+                        'eval_pearsonr': eval_pearsonr}
                 
                 logger.info(result)
     
-    if args.local_rank in [-1, 0]:
+    if args.local_rank in [-1, 0] and not (args.do_test and not args.do_train):
         tb_writer.close()
 
 if __name__ == "__main__":

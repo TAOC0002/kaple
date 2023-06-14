@@ -7,6 +7,7 @@ def parse(parser):
                         help="Up to which year the sts datasets are constrcuted")
     parser.add_argument("--optimze_et_loss", default=False, type=bool,
                         help="optimze the loss of the second adapter.")
+    parser.add_argument("--score_range", default=5, type=int, help="Range of the STS scores.")
     parser.add_argument("--output_dir", default=None, type=str, required=True,
                         help="The output directory where the model predictions and checkpoints will be written. The directory will be created if it doesn't exist.")
     parser.add_argument("--output_folder", default=None, type=str, required=True,
@@ -28,6 +29,7 @@ def parse(parser):
     parser.add_argument('--meta_fac_adaptermodel', default='',type=str, help='the pretrained factual adapter model')
     parser.add_argument('--meta_et_adaptermodel', default='',type=str, help='the pretrained entity typing adapter model')
     parser.add_argument('--meta_lin_adaptermodel', default='', type=str, help='the pretrained linguistic adapter model')
+    parser.add_argument('--optimize_et_loss', default=False, type=bool, help="Whether or not to optimize et adapter loss.")
     parser.add_argument('--meta_bertmodel', default='', type=str, help='the pretrained bert model')
     parser.add_argument("--max_seq_length", default=128, type=int,
                         help="The maximum total input sequence length after tokenization. Sequences longer "

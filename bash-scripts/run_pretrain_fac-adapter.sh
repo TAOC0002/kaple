@@ -4,7 +4,7 @@
 
 # task=ddi
 # GPU='0'
-# CUDA_VISIBLE_DEVICES=$GPU python ./adapters/patent-rel.py  \
+# CUDA_VISIBLE_DEVICES=$GPU python -m torch.distributed.launch --nproc_per_node 2 ./adapters/patent-rel.py  \
 #         --model_type roberta \
 #         --model_name_or_path roberta-large \
 #         --data_dir ./data/ddi  \
@@ -30,12 +30,39 @@
 #         --meta_adapter_model="" \
 #         --comment='empty'
 
-task=stsb
-GPU='0'
-CUDA_VISIBLE_DEVICES=$GPU python ../adapters/pretrain-sts-cross.py  \
+# task=stsb
+# GPU='0'
+# CUDA_VISIBLE_DEVICES=$GPU python ../adapters/pretrain-sts-cross.py  \
+#         --model_type roberta \
+#         --model_name_or_path roberta-large \
+#         --data_dir ../data/sts/stsbenchmark  \
+#         --output_dir ../proc_data/adapter_pretraining \
+#         --restore '' \
+#         --do_train  \
+#         --do_eval   \
+#         --evaluate_during_training 'True' \
+#         --task_name=$task     \
+#         --per_gpu_train_batch_size=2   \
+#         --per_gpu_eval_batch_size=2   \
+#         --num_train_epochs 15 \
+#         --max_seq_length 64 \
+#         --gradient_accumulation_steps 4 \
+#         --learning_rate 5e-6 \
+#         --warmup_steps=1200 \
+#         --save_steps 20000 \
+#         --eval_steps 80 \
+#         --adapter_size 768 \
+#         --adapter_list "0,11,22" \
+#         --adapter_skip_layers 0 \
+#         --adapter_transformer_layers 2 \
+#         --comment='june10-stsb-cross'
+
+task=nli
+GPU='1'
+CUDA_VISIBLE_DEVICES=$GPU python ../adapters/pretrain-nli.py  \
         --model_type roberta \
         --model_name_or_path roberta-large \
-        --data_dir ../data/sts/stsbenchmark  \
+        --data_dir ../data/nli  \
         --output_dir ../proc_data/adapter_pretraining \
         --restore '' \
         --do_train  \
@@ -44,15 +71,16 @@ CUDA_VISIBLE_DEVICES=$GPU python ../adapters/pretrain-sts-cross.py  \
         --task_name=$task     \
         --per_gpu_train_batch_size=2   \
         --per_gpu_eval_batch_size=2   \
-        --num_train_epochs 15 \
+        --num_train_epochs 3 \
         --max_seq_length 64 \
         --gradient_accumulation_steps 4 \
         --learning_rate 5e-6 \
         --warmup_steps=1200 \
         --save_steps 20000 \
-        --eval_steps 80 \
+        --eval_steps 9000 \
+        --logging_steps 50 \
         --adapter_size 768 \
         --adapter_list "0,11,22" \
         --adapter_skip_layers 0 \
         --adapter_transformer_layers 2 \
-        --comment='june10-stsb-cross'
+        --comment='june14-nli'

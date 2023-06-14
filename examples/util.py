@@ -489,7 +489,7 @@ class patentModel(nn.Module):
         self.loss = loss
 
     def forward(self, pretrained_model_outputs, labels=None, pseudo_labels=None, pseudo_fac_labels=None, labelling=False):
-        batch_size = self.args.train_batch_size // self.args.gradient_accumulation_steps
+        batch_size = pretrained_model_outputs[0].shape[0]
         fac_adapter_outputs = torch.rand(batch_size, self.args.max_seq_length, self.config.hidden_size).to(self.args.device)
         et_adapter_outputs = torch.rand(batch_size, self.args.max_seq_length, self.config.hidden_size).to(self.args.device)
         pretrained_model_last_hidden_states = pretrained_model_outputs[0]
@@ -588,7 +588,11 @@ class patentModel(nn.Module):
                 if self.loss == "bce":
                     loss = loss_fct(sigmoid(outputs), pseudo_labels) + loss_fct(sigmoid(fac_outputs), pseudo_fac_labels)
                 elif self.loss == "mse":
-                    loss = loss_fct(outputs, pseudo_labels) + loss_fct(fac_outputs, pseudo_fac_labels)
+                    outputs = self.args.score_range*sigmoid(outputs)
+                    loss = loss_fct(outputs, pseudo_labels) 
+                    if self.args.meta_fac_adaptermodel is not '':
+                        fac_outputs = self.args.score_range*sigmoid(fac_outputs)
+                        loss += loss_fct(fac_outputs, pseudo_labels)
             return (loss, outputs, fac_outputs)
         
         elif not labels and not pseudo_labels:

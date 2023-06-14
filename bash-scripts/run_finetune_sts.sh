@@ -10,6 +10,7 @@
 # --data_dir ../data/sts/sts12-16/all \
 # --year '2016' \
 # --score_range 5 \
+# --num_train_epochs 3 \
 # --min_steps 10 \
 # --preprocess_type read_sts_examples \
 # --output_dir  ../proc_data/roberta_sts \
@@ -47,6 +48,7 @@ CUDA_VISIBLE_DEVICES=$GPU python -m torch.distributed.launch --nproc_per_node 2 
 --output_dir ../proc_data/roberta_sts \
 --max_seq_length 512 \
 --eval_steps 60 \
+--num_train_epochs 15 \
 --per_gpu_train_batch_size $batch \
 --gradient_accumulation_steps $accu \
 --per_gpu_eval_batch_size $batch \

@@ -77,8 +77,8 @@ CUDA_VISIBLE_DEVICES=$GPU python ../adapters/pretrain-nli.py  \
         --learning_rate 5e-6 \
         --warmup_steps=1200 \
         --save_steps 20000 \
-        --eval_steps 9000 \
-        --logging_steps 50 \
+        --eval_steps 2250 \
+        --logging_steps 2250 \
         --adapter_size 768 \
         --adapter_list "0,11,22" \
         --adapter_skip_layers 0 \

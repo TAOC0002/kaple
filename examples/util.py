@@ -553,7 +553,6 @@ class patentModel(nn.Module):
 
         sigmoid = Sigmoid()
         if labels is not None or pseudo_labels is not None or labelling:
-            sigmoid = Sigmoid()
             if self.loss == "bce":
                 loss_fct = BCELoss()
             elif self.loss == "mse":

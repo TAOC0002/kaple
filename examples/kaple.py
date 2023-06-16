@@ -45,6 +45,8 @@ def main():
                         help="freeze the parameters of pretrained model.")
     parser.add_argument("--freeze_adapter", default=False, type=bool,
                         help="freeze the parameters of adapter.")
+    parser.add_argument("--optimze_et_loss", default=False, type=bool,
+                        help="optimze_et_loss")
 
     parser.add_argument('--fusion_mode', type=str, default='concat',help='the fusion mode for bert feautre (and adapter feature) |add|concat|attentiom')
     parser.add_argument("--adapter_transformer_layers", default=2, type=int,
@@ -143,7 +145,7 @@ def main():
     args.my_model_name = name_prefix
     args.output_dir = os.path.join(args.output_dir, name_prefix)
     assert args.loss in ['bce', 'infonce']
-    assert not (args.meta_fac_adaptermodel and args.meta_et_adaptermodel and args.meta_lin_adaptermodel)
+    # assert not (args.meta_fac_adaptermodel and args.meta_et_adaptermodel and args.meta_lin_adaptermodel)
 
     if os.path.exists(args.output_dir) and os.listdir(args.output_dir) and args.do_train and not args.overwrite_output_dir:
         raise ValueError("Output directory ({}) already exists and is not empty. Use --overwrite_output_dir to overcome.".format(args.output_dir))

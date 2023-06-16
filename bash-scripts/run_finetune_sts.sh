@@ -48,7 +48,7 @@ CUDA_VISIBLE_DEVICES=$GPU python -m torch.distributed.launch --nproc_per_node 2 
 --output_dir ../proc_data/roberta_sts \
 --max_seq_length 512 \
 --eval_steps 60 \
---num_train_epochs 15 \
+--num_train_epochs 30 \
 --per_gpu_train_batch_size $batch \
 --gradient_accumulation_steps $accu \
 --per_gpu_eval_batch_size $batch \
@@ -58,20 +58,19 @@ CUDA_VISIBLE_DEVICES=$GPU python -m torch.distributed.launch --nproc_per_node 2 
 --adapter_size 768 \
 --adapter_list "0,11,22" \
 --adapter_skip_layers 0 \
---meta_fac_adaptermodel="../proc_data/adapter_pretraining/june10-stsb-cross/best-checkpoint/pytorch_model.bin" \
+--meta_fac_adaptermodel="../proc_data/adapter_pretraining/june14-nli/best-checkpoint/pytorch_model.bin" \
 --meta_et_adaptermodel="../pretrained_models/fac-adapter/pytorch_model.bin" \
 --meta_lin_adaptermodel="../pretrained_models/lin-adapter/pytorch_model.bin" \
 --optimize_et_loss="" \
 --fusion_mode='concat' \
 --metrics spearmanr \
---comment june10-our-orig-bi \
+--comment june14-nli-cross \
 --overwrite_output_dir \
---mode bi \
+--mode cross \
 --pooling cls \
 --loss mse \
 --do_train \
 --do_eval \
---do_test \
 --freeze_adapter=""
 
 # --meta_bertmodel="../proc_data/roberta_sts/temp/pytorch_bertmodel_best.bin" \

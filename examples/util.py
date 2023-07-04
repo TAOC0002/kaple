@@ -591,7 +591,7 @@ class patentModel(nn.Module):
                     loss = loss_fct(outputs, pseudo_labels) 
                     if self.args.meta_fac_adaptermodel is not '':
                         fac_outputs = self.args.score_range*sigmoid(fac_outputs)
-                        loss += loss_fct(fac_outputs, pseudo_labels)
+                        loss += (0.3*loss_fct(fac_outputs, pseudo_labels))
             return (loss, outputs, fac_outputs)
         
         elif not labels and not pseudo_labels:

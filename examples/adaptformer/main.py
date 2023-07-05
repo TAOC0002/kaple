@@ -43,7 +43,7 @@ def main():
     parser.add_argument("--comment", default='', type=str, help="The comment")
 
     parser.add_argument('--meta_bertmodel', default='', type=str, help='the pretrained bert model')
-    parser.add_argument('--meta_patentmodel', default='', type=str, help='the pretrained patent model')
+    parser.add_argument('--meta_adaptermodel', default='', type=str, help='the adapter model')
 
     ## Other parameters
     parser.add_argument("--max_seq_length", default=128, type=int,
@@ -80,6 +80,7 @@ def main():
                         help="Whether to run eval on the dev set.")
     parser.add_argument("--do_test", action='store_true',
                         help="Whether to run eval on the test set.")
+    parser.add_argument('--freeze_adapter', action='store_true', help='whether to freeze the adapter')
 
     # --meta_bertmodel="./proc_data/roberta_patentmatch/patentmatch_batch-8_lr-5e-06_warmup-0_epoch-6.0_concat/pytorch_bertmodel_4400_0.5436605821410952.bin"
     
@@ -131,20 +132,20 @@ def main():
         tokenizer = AutoTokenizer.from_pretrained("princeton-nlp/sup-simcse-roberta-large")
 
     pretrained_model = AdaptFormer(args)
-    adapter_params = [pretrained_model.blocks[i].adaptmlp for i in range(len(pretrained_model.blocks))]
-    print(adapter_params)
-    pretrained_params = [pretrained_model.blocks[i].adaptmlp for i in range(len(pretrained_model.blocks))]
-    # print(pretrained_params)
+    model_dict = pretrained_model.state_dict()
+    adapter_params = [n for n, p in pretrained_model.named_parameters() if 'adaptmlp' in n]
+    # for n, p in pretrained_model.named_parameters():
+    #     print(n)
 
-    if args.meta_bertmodel:
+    if args.meta_adaptermodel:
         model_dict = pretrained_model.state_dict()
-        bert_meta_dict = torch.load(args.meta_bertmodel, map_location=lambda storage, loc: storage)
+        bert_meta_dict = torch.load(args.meta_adaptermodel, map_location=lambda storage, loc: storage)
 
         changed_bert_meta = {}
-        for key in bert_meta_dict.keys():
-            changed_bert_meta[key] = bert_meta_dict[key]
+        for key in adapter_params:
+            if key in model_dict.keys():
+                changed_bert_meta[key] = bert_meta_dict[key]
 
-        changed_bert_meta = {k: v for k, v in changed_bert_meta.items() if k in model_dict.keys()}
         print('Parameters to change:', changed_bert_meta.keys())
         model_dict.update(changed_bert_meta)
         pretrained_model.load_state_dict(model_dict)
@@ -157,8 +158,6 @@ def main():
 
     args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
     args.eval_batch_size = args.per_gpu_eval_batch_size * max(1, args.n_gpu)
-    # for n, p in pretrained_model.named_parameters():
-    #     print(n)
 
     # if args.do_train:
     #     train_examples = read_sts_examples(os.path.join(args.data_dir, args.year + '.train.tsv'), is_training=True)

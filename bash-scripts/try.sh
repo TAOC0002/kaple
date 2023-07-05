@@ -17,4 +17,5 @@ CUDA_VISIBLE_DEVICES=$GPU python ../examples/adaptformer/main.py \
 --comment july5 \
 --overwrite_output_dir \
 --do_train \
---do_eval
+--do_eval \
+--meta_adaptermodel 'ereqr'

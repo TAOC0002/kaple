@@ -17,17 +17,26 @@ from torch.nn import Sigmoid, MSELoss
 class AdaptFormer(nn.Module):
     """ Vision Transformer with support for global average pooling
     """
-    def __init__(self, args, score_range=5, num_classes=1, embed_dim=768):
+    def __init__(self, args, score_range=5, num_classes=1, embed_dim=1024):
         super(AdaptFormer, self).__init__()
         self.args = args
         self.num_classes = num_classes
         self.num_features = self.embed_dim = embed_dim  # num_features for consistency with other models
         self.score_range = score_range
-        self.config = RobertaConfig()
+        self.config = RobertaConfig(hidden_size=1024, num_hidden_layers=24, num_attention_heads=16)
 
         self.classifier = nn.Linear(self.num_features, num_classes)
         self.embeddings = RobertaEmbeddings(self.config)
         self.blocks = nn.ModuleList([Block(config=self.config) for _ in range(self.config.num_hidden_layers)])
+        if self.args.freeze_adapter:
+            for i in range(self.config.num_hidden_layers):
+                self.blocks[i].adaptmlp.adapter_layer_norm_before.weight.requires_grad = False
+                self.blocks[i].adaptmlp.adapter_layer_norm_before.bias.requires_grad = False
+                self.blocks[i].adaptmlp.down_proj.weight.requires_grad = False
+                self.blocks[i].adaptmlp.down_proj.bias.requires_grad = False
+                self.blocks[i].adaptmlp.up_proj.weight.requires_grad = False
+                self.blocks[i].adaptmlp.up_proj.bias.requires_grad = False
+
 
     def forward_features(self, input_ids, attention_mask=None, token_type_ids=None, position_ids=None, head_mask=None):
         if attention_mask is None:

@@ -311,7 +311,7 @@ class PretrainedModel(nn.Module):
     def __init__(self, args):
         super(PretrainedModel, self).__init__()
         if args.model_name_or_path == 'bert':
-            self.model = BertModel.from_pretrained("bert-base-uncased ", output_hidden_states=True)
+            self.model = BertModel.from_pretrained("bert-base-uncased", output_hidden_states=True)
         elif args.model_name_or_path == 'roberta-large':
             self.model = RobertaModel.from_pretrained("roberta-large", output_hidden_states=True)
         elif args.model_name_or_path == 'simcse':

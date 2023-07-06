@@ -28,15 +28,20 @@ class AdaptFormer(nn.Module):
         self.classifier = nn.Linear(self.num_features, num_classes)
         self.embeddings = RobertaEmbeddings(self.config)
         self.blocks = nn.ModuleList([Block(config=self.config) for _ in range(self.config.num_hidden_layers)])
+
+        if self.args.freeze_pretrained:
+            for param in self.classifier.parameters() or param in self.embeddings.parameters():
+                param.requires_grad = False
+            for i in range(self.config.num_hidden_layers):
+                for elements in self.blocks[i]:
+                    elements.requires_grad = False
+                for adapter_elements in self.blocks[i].adaptmlp:
+                    adapter_elements.requires_grad = True
+
         if self.args.freeze_adapter:
             for i in range(self.config.num_hidden_layers):
-                self.blocks[i].adaptmlp.adapter_layer_norm_before.weight.requires_grad = False
-                self.blocks[i].adaptmlp.adapter_layer_norm_before.bias.requires_grad = False
-                self.blocks[i].adaptmlp.down_proj.weight.requires_grad = False
-                self.blocks[i].adaptmlp.down_proj.bias.requires_grad = False
-                self.blocks[i].adaptmlp.up_proj.weight.requires_grad = False
-                self.blocks[i].adaptmlp.up_proj.bias.requires_grad = False
-
+                for adapter_elements in self.blocks[i].adaptmlp:
+                    adapter_elements.requires_grad = False
 
     def forward_features(self, input_ids, attention_mask=None, token_type_ids=None, position_ids=None, head_mask=None):
         if attention_mask is None:
@@ -47,7 +52,7 @@ class AdaptFormer(nn.Module):
         hidden_states = self.embeddings(input_ids, position_ids=position_ids, token_type_ids=token_type_ids)
 
         for i, block in enumerate(self.blocks):
-            layer_outputs = block(hidden_states, attention_mask, head_mask[i])
+            layer_outputs = block(hidden_states=hidden_states, attention_mask=attention_mask, head_mask=head_mask[i])
             hidden_states = layer_outputs
 
         encoder_outputs = (hidden_states,)

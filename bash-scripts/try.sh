@@ -1,11 +1,10 @@
 batch=8
 accu=8
 lr=5e-6
-GPU='0'
+GPU=''
 CUDA_VISIBLE_DEVICES=$GPU python ../examples/adaptformer/main.py \
 --model_name_or_path roberta-large \
---data_dir ../data/sts/sts12-16/all \
---year '2016' \
+--data_dir ../data/sts/stsbenchmark \
 --output_dir ../proc_data/roberta_sts \
 --max_seq_length 512 \
 --eval_steps 60 \
@@ -18,4 +17,4 @@ CUDA_VISIBLE_DEVICES=$GPU python ../examples/adaptformer/main.py \
 --overwrite_output_dir \
 --do_train \
 --do_eval \
---meta_adaptermodel 'ereqr'
+--no_cuda

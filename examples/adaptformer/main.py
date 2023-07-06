@@ -19,7 +19,8 @@ from pytorch_transformers.tokenization_roberta import RobertaTokenizer
 from transformers import AutoTokenizer
 from itertools import cycle
 from pytorch_transformers import AdamW, WarmupLinearSchedule
-from examples.util import EarlyStopping, read_sts_examples, convert_examples_to_features, set_seed
+from examples.util import read_sts_examples, convert_examples_to_features, set_seed
+from data.sts.stsbenchmark.util_data import build_examples_and_convert_to_features
 from adaptformer import AdaptFormer
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
@@ -34,15 +35,14 @@ def main():
     ## Required parameters
     parser.add_argument("--data_dir", default=None, type=str, required=True,
                         help="The input data dir. Should contain the .tsv files (or other data files) for the task.")
-    parser.add_argument("--year", default=None, type=str, required=True,
-                        help="Up to which year the sts datasets are constrcuted")
+    # parser.add_argument("--year", default=None, type=str, required=True,
+    #                     help="Up to which year the sts datasets are constrcuted")
     parser.add_argument("--model_name_or_path", default=None, type=str, required=True,
                         help="Path to pre-trained model or shortcut name selected in the list: roberta-large, simcse")
     parser.add_argument("--output_dir", default=None, type=str, required=True,
                         help="The output directory where the model predictions and checkpoints will be written.")
     parser.add_argument("--comment", default='', type=str, help="The comment")
 
-    parser.add_argument('--meta_bertmodel', default='', type=str, help='the pretrained bert model')
     parser.add_argument('--meta_adaptermodel', default='', type=str, help='the adapter model')
 
     ## Other parameters
@@ -81,6 +81,7 @@ def main():
     parser.add_argument("--do_test", action='store_true',
                         help="Whether to run eval on the test set.")
     parser.add_argument('--freeze_adapter', action='store_true', help='whether to freeze the adapter')
+    parser.add_argument('--freeze_pretrained', action='store_true', help='whether to freeze the pretrained model')
 
     # --meta_bertmodel="./proc_data/roberta_patentmatch/patentmatch_batch-8_lr-5e-06_warmup-0_epoch-6.0_concat/pytorch_bertmodel_4400_0.5436605821410952.bin"
     
@@ -134,6 +135,7 @@ def main():
     pretrained_model = AdaptFormer(args)
     model_dict = pretrained_model.state_dict()
     adapter_params = [n for n, p in pretrained_model.named_parameters() if 'adaptmlp' in n]
+    pretrained_params = [n for n, p in pretrained_model.named_parameters() if 'adaptmlp' not in n]
     # for n, p in pretrained_model.named_parameters():
     #     print(n)
 
@@ -159,249 +161,216 @@ def main():
     args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
     args.eval_batch_size = args.per_gpu_eval_batch_size * max(1, args.n_gpu)
 
-    # if args.do_train:
-    #     train_examples = read_sts_examples(os.path.join(args.data_dir, args.year + '.train.tsv'), is_training=True)
-    #     train_features = convert_examples_to_features(
-    #         train_examples, tokenizer, args.max_seq_length, args.mode, logger, is_training=True, label_type='regression')
-        
-    #     if args.train_steps > 0:
-    #         num_train_optimization_steps = args.train_steps
-    #     else:
-    #         args.train_steps = int(args.num_train_epochs * len(train_examples) // args.train_batch_size)
-    #         num_train_optimization_steps = args.train_steps
+    if args.do_train:
+        train_features = build_examples_and_convert_to_features('train.tsv', 'cross', args.max_seq_length, tokenizer) 
+        num_train_optimization_steps = int(args.num_train_epochs * len(train_features) // args.train_batch_size)
 
-    #     batch_size = args.train_batch_size // args.gradient_accumulation_steps
+        batch_size = args.train_batch_size // args.gradient_accumulation_steps
+        all_input_ids = torch.tensor([f.input_ids for f in train_features], dtype=torch.long)
+        all_input_mask = torch.tensor([f.input_mask for f in train_features], dtype=torch.long)
+        all_segment_ids = torch.tensor([f.segment_ids for f in train_features], dtype=torch.long)
+        all_label = torch.tensor([f.label for f in train_features], dtype=torch.float32)
+        train_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label)
+        if args.local_rank == -1:
+            train_sampler = RandomSampler(train_data)
+        else:
+            train_sampler = DistributedSampler(train_data)
+        train_dataloader = DataLoader(train_data, sampler=train_sampler,
+                                    batch_size=batch_size)
+        if args.do_eval:
+            eval_features = build_examples_and_convert_to_features('val.tsv', 'cross', args.max_seq_length, tokenizer)
+            all_input_ids = torch.tensor([f.input_ids for f in eval_features], dtype=torch.long)
+            all_input_mask = torch.tensor([f.input_mask for f in eval_features], dtype=torch.long)
+            all_segment_ids = torch.tensor([f.segment_ids for f in eval_features], dtype=torch.long)
+            all_label = torch.tensor([f.label for f in eval_features], dtype=torch.float32)
+            eval_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label)
 
-    #     all_input_ids = torch.tensor([f.input_ids for f in train_features], dtype=torch.long)
-    #     all_input_mask = torch.tensor([f.input_mask for f in train_features], dtype=torch.long)
-    #     all_segment_ids = torch.tensor([f.segment_ids for f in train_features], dtype=torch.long)
-    #     all_label = torch.tensor([f.label for f in train_features], dtype=torch.float32)
-    #     train_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label)
-    #     if args.local_rank == -1:
-    #         train_sampler = RandomSampler(train_data)
-    #     else:
-    #         train_sampler = DistributedSampler(train_data)
-    #     train_dataloader = DataLoader(train_data, sampler=train_sampler,
-    #                                 batch_size=batch_size)
-
-        # no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
-        # frozen_params = []
-        # if args.freeze_adapter:
-        #     frozen_params.extend(adapter_params)
-        # else:
-        #     frozen_params.extend()
+        no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
+        frozen_params = []
+        if args.freeze_adapter:
+            frozen_params.extend(adapter_params)
+        elif args.freeze_pretrained:
+            frozen_params.extend(pretrained_params)
             
-        # optimizer_grouped_parameters = [
-        #         {'params': [p for n, p in pretrained_model.named_parameters() if not any(nd in n for nd in no_decay) and if n not in frozen_params],
-        #          'weight_decay': args.weight_decay},
-        #         {'params': [p for n, p in pretrained_model.named_parameters() if any(nd in n for nd in no_decay) and if n not in frozen_params],
-        #          'weight_decay': 0.0}
-        #     ]
+        optimizer_grouped_parameters = [
+                {'params': [p for n, p in pretrained_model.named_parameters() if not any(nd in n for nd in no_decay) and n not in frozen_params],
+                 'weight_decay': args.weight_decay},
+                {'params': [p for n, p in pretrained_model.named_parameters() if any(nd in n for nd in no_decay) and n not in frozen_params],
+                 'weight_decay': 0.0}
+            ]
 
-    #     optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
-    #     scheduler = WarmupLinearSchedule(optimizer, warmup_steps=args.warmup_steps,
-    #                                      t_total=num_train_optimization_steps)
+        optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
+        scheduler = WarmupLinearSchedule(optimizer, warmup_steps=0,
+                                         t_total=num_train_optimization_steps)
 
-    #     global_step = 0
+        global_step = 0
+        if args.n_gpu > 1:
+            if args.freeze_bert:
+                pretrained_model = torch.nn.DataParallel(pretrained_model)
 
-    #     if args.n_gpu > 1:
-    #         if args.freeze_bert:
-    #             pretrained_model = torch.nn.DataParallel(pretrained_model)
+        best_spearmanr, best_personr = 0, 0
+        pretrained_model.train()
+        tr_loss, logging_loss = 0.0, 0.0
+        nb_tr_examples, nb_tr_steps = 0, 0
 
-    #     best_spearmanr, best_personr = 0, 0
-    #     if args.freeze_bert:
-    #         pretrained_model.eval()
-    #     else:
-    #         pretrained_model.train()
-    #     tr_loss, logging_loss = 0.0, 0.0
-    #     nb_tr_examples, nb_tr_steps = 0, 0
+        bar = tqdm(range(num_train_optimization_steps), total=num_train_optimization_steps)
+        train_dataloader = cycle(train_dataloader)
+        eval_flag = True
 
-    #     bar = tqdm(range(num_train_optimization_steps), total=num_train_optimization_steps)
-    #     train_dataloader = cycle(train_dataloader)
-    #     eval_flag = True
+        for step in bar:
+            batch = next(train_dataloader)
+            batch = tuple(t.to(device) for t in batch)
+            input_ids, input_mask, segment_ids, label_ids = batch
+            loss, output_logits = pretrained_model(input_ids=input_ids, token_type_ids=segment_ids, attention_mask=input_mask, labels=label_ids)
+            output_logits = output_logits.detach().cpu().numpy()
+            label_ids = label_ids.to('cpu').numpy()
 
-    #     for step in bar:
-    #         batch = next(train_dataloader)
-    #         batch = tuple(t.to(device) for t in batch)
-    #         input_ids, input_mask, segment_ids, label_ids = batch
-    #         pretrained_model_outputs = pretrained_model(input_ids=input_ids, token_type_ids=segment_ids, attention_mask=input_mask, labels=label_ids)
-    #         output_logits = output_logits.detach().cpu().numpy()
-    #         label_ids = label_ids.to('cpu').numpy()
+            if args.n_gpu > 1:
+                loss = loss.mean()  # mean() to average on multi-gpu.
+            if args.gradient_accumulation_steps > 1:
+                loss = loss / args.gradient_accumulation_steps
 
-    #         if args.n_gpu > 1:
-    #             loss = loss.mean()  # mean() to average on multi-gpu.
-    #         if args.fp16 and args.loss_scale != 1.0:
-    #             loss = loss * args.loss_scale
-    #         if args.gradient_accumulation_steps > 1:
-    #             loss = loss / args.gradient_accumulation_steps
+            tr_loss += loss.item()
+            train_loss = round(tr_loss * args.gradient_accumulation_steps / (nb_tr_steps + 1), 4)
+            bar.set_description("loss {}".format(train_loss))
+            nb_tr_examples += input_ids.size(0)
+            nb_tr_steps += 1
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(pretrained_model.parameters(), args.max_grad_norm)
 
-    #         tr_loss += loss.item()
-    #         train_loss = round(tr_loss * args.gradient_accumulation_steps / (nb_tr_steps + 1), 4)
-    #         bar.set_description("loss {}".format(train_loss))
+            if (nb_tr_steps + 1) % args.gradient_accumulation_steps == 0:
+                optimizer.step()
+                optimizer.zero_grad()
+                scheduler.step()
+                global_step += 1
+                eval_flag = True
 
-    #         nb_tr_examples += input_ids.size(0)
-    #         nb_tr_steps += 1
+            if args.do_eval and ((global_step + 1) % args.eval_steps == 0) and eval_flag:
+                eval_flag = False
+                # Run prediction for full data
+                eval_sampler = SequentialSampler(eval_data)
+                eval_dataloader = DataLoader(eval_data, sampler=eval_sampler, batch_size=args.eval_batch_size)
 
-    #         loss.backward()
-    #         torch.nn.utils.clip_grad_norm_(pretrained_model.parameters(), args.max_grad_norm)
+                pretrained_model.eval()
+                eval_loss = 0
+                nb_eval_steps, nb_eval_examples = 0, 0
 
-    #         if (nb_tr_steps + 1) % args.gradient_accumulation_steps == 0:
+                for input_ids, input_mask, segment_ids, label_ids in eval_dataloader:
+                    input_ids = input_ids.to(device)
+                    input_mask = input_mask.to(device)
+                    segment_ids = segment_ids.to(device)
+                    label_ids = label_ids.to(device)
 
-    #             optimizer.step()
-    #             optimizer.zero_grad()
-    #             scheduler.step()
-    #             global_step += 1
-    #             eval_flag = True
+                    with torch.no_grad():
+                        tmp_eval_loss, logits = pretrained_model(input_ids=input_ids, token_type_ids=segment_ids,
+                                            attention_mask=input_mask, labels=label_ids)
+                    logits = logits.detach().cpu().numpy()
+                    label_ids = label_ids.to('cpu').numpy()
+                    eval_loss += tmp_eval_loss.item()
+                    
+                    nb_eval_steps += 1
+                    nb_eval_examples += input_ids.size(0)
+                    if nb_eval_steps == 1:
+                        inference = logits.copy()
+                        gold = label_ids.copy()
+                    else:
+                        inference = np.concatenate((inference, logits), axis=0)
+                        gold = np.concatenate((gold, label_ids), axis=0)
 
-    #         if args.do_eval and ((global_step + 1) % args.eval_steps == 0) and eval_flag:
-    #             eval_flag = False
-    #             for file in [args.year + '.val.tsv']:
+                eval_loss = eval_loss / nb_eval_steps
 
-    #                 eval_examples = read_examples_dict[args.preprocess_type](os.path.join(args.data_dir, file),
-    #                                                                          is_training=True)
-    #                 eval_features = convert_examples_to_features_dict[args.preprocess_type](
-    #                     eval_examples, tokenizer, args.max_seq_length, args.mode, logger, is_training=True, label_type='regression')
+                if args.local_rank in [-1, 0]:
+                    logger.info("***** Running training *****")
+                    logger.info("  Num examples = %d", len(train_features))
+                    logger.info("  Batch size = %d", args.train_batch_size)
+                    logger.info("  Num steps = %d", num_train_optimization_steps)
 
-    #                 all_input_ids = torch.tensor([f.input_ids for f in eval_features], dtype=torch.long)
-    #                 all_input_mask = torch.tensor([f.input_mask for f in eval_features], dtype=torch.long)
-    #                 all_segment_ids = torch.tensor([f.segment_ids for f in eval_features], dtype=torch.long)
-    #                 all_label = torch.tensor([f.label for f in eval_features], dtype=torch.float32)
-    #                 eval_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label)
-    #                 # Run prediction for full data
-    #                 eval_sampler = SequentialSampler(eval_data)
-    #                 eval_dataloader = DataLoader(eval_data, sampler=eval_sampler, batch_size=args.eval_batch_size)
+                    eval_spearmanr = spearmanr(np.squeeze(inference), gold)[0]
+                    eval_pearsonr = pearsonr(np.squeeze(inference), gold)[0]
+                    
+                    result = {'eval_loss': eval_loss,
+                            'eval_spearmanr': eval_spearmanr,
+                            'eval_pearsonr': eval_pearsonr,
+                            'global_step': global_step + 1,
+                            'loss': train_loss}       
+                    logger.info(result)
 
-    #                 pretrained_model.eval()
-    #                 eval_loss = 0
-    #                 nb_eval_steps, nb_eval_examples = 0, 0
+                    output_eval_file = os.path.join(args.output_dir, "eval_results.txt")
+                    with open(output_eval_file, "a", encoding='utf8') as writer:
+                        for key in sorted(result.keys()):
+                            logger.info("  %s = %s", key, str(result[key]))
+                            writer.write("%s = %s\n" % (key, str(result[key])))
+                        writer.write('*' * 80)
+                        writer.write('\n')
+                    if eval_spearmanr > best_spearmanr:
+                        print("=" * 80)
+                        print("Best Spearman score", eval_spearmanr)
+                        print("Saving Model......")
+                        best_spearmanr = eval_spearmanr
+                        # Save a trained model
+                        model_to_save = pretrained_model.module if hasattr(pretrained_model,
+                                                                        'module') else pretrained_model
+                        output_model_file = os.path.join(args.output_dir, "pytorch_bertmodel_best.bin")
+                        torch.save(model_to_save.state_dict(), output_model_file)
+                    else:
+                        print("=" * 80)
+                        print("Best Spearman score", best_spearmanr)
 
-    #                 for input_ids, input_mask, segment_ids, label_ids in eval_dataloader:
-    #                     input_ids = input_ids.to(device)
-    #                     input_mask = input_mask.to(device)
-    #                     segment_ids = segment_ids.to(device)
-    #                     label_ids = label_ids.to(device)
+                pretrained_model.train()
 
-    #                     with torch.no_grad():
-    #                         pretrained_model_outputs = pretrained_model(input_ids=input_ids, token_type_ids=segment_ids,
-    #                                             attention_mask=input_mask, labels=label_ids)
+    if args.do_test:
+        pretrained_model.eval()
+        print('test...')
+        for file in ['test.tsv']:
+            eval_features = build_examples_and_convert_to_features('test.tsv', 'cross', args.max_seq_length, tokenizer)
+            logger.info("***** Running evaluation *****")
+            logger.info("  Num examples = %d", len(eval_features))
+            logger.info("  Batch size = %d", args.eval_batch_size)
 
-    #                     logits = logits.detach().cpu().numpy()
-    #                     label_ids = label_ids.to('cpu').numpy()
-    #                     eval_loss += tmp_eval_loss.item()
-                        
-    #                     nb_eval_steps += 1
-    #                     nb_eval_examples += input_ids.size(0)
-    #                     if nb_eval_steps == 1:
-    #                         inference = logits.copy()
-    #                         gold = label_ids.copy()
-    #                     else:
-    #                         inference = np.concatenate((inference, logits), axis=0)
-    #                         gold = np.concatenate((gold, label_ids), axis=0)
+            all_input_ids = torch.tensor([f.input_ids for f in eval_features], dtype=torch.long)
+            all_input_mask = torch.tensor([f.input_mask for f in eval_features], dtype=torch.long)
+            all_segment_ids = torch.tensor([f.segment_ids for f in eval_features], dtype=torch.long)
+            all_label = torch.tensor([f.label for f in eval_features], dtype=torch.float32)
+            eval_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label)
+            # Run prediction for full data
+            eval_sampler = SequentialSampler(eval_data)
+            eval_dataloader = DataLoader(eval_data, sampler=eval_sampler, batch_size=args.eval_batch_size)
 
-    #                 eval_loss = eval_loss / nb_eval_steps
+            pretrained_model.eval()
+            eval_loss = 0
+            nb_eval_steps, nb_eval_examples = 0, 0
+            for input_ids, input_mask, segment_ids, label_ids in eval_dataloader:
+                input_ids = input_ids.to(device)
+                input_mask = input_mask.to(device)
+                segment_ids = segment_ids.to(device)
+                label_ids = label_ids.to(device)
 
-    #                 if args.local_rank in [-1, 0]:
-    #                     logger.info("***** Running training *****")
-    #                     logger.info("  Num examples = %d", len(train_examples))
-    #                     logger.info("  Batch size = %d", args.train_batch_size)
-    #                     logger.info("  Num steps = %d", num_train_optimization_steps)
-
-    #                     eval_spearmanr = spearmanr(np.squeeze(inference), gold)[0]
-    #                     eval_pearsonr = pearsonr(np.squeeze(inference), gold)[0]
-                        
-    #                     result = {'eval_loss': eval_loss,
-    #                             'eval_spearmanr': eval_spearmanr,
-    #                             'eval_pearsonr': eval_pearsonr,
-    #                             'global_step': global_step + 1,
-    #                             'loss': train_loss}
-                       
-    #                     logger.info(result)
-
-    #                     output_eval_file = os.path.join(args.output_dir, "eval_results.txt")
-    #                     with open(output_eval_file, "a", encoding='utf8') as writer:
-    #                         for key in sorted(result.keys()):
-    #                             logger.info("  %s = %s", key, str(result[key]))
-    #                             writer.write("%s = %s\n" % (key, str(result[key])))
-    #                         writer.write('*' * 80)
-    #                         writer.write('\n')
-    #                     if eval_spearmanr > best_spearmanr:
-    #                         print("=" * 80)
-    #                         print("Best Spearman score", eval_spearmanr)
-    #                         print("Saving Model......")
-    #                         best_spearmanr = eval_spearmanr
-    #                         # Save a trained model
-    #                         model_to_save = pretrained_model.module if hasattr(pretrained_model,
-    #                                                                         'module') else pretrained_model
-    #                         output_model_file = os.path.join(args.output_dir, "pytorch_bertmodel_best.bin")
-    #                         torch.save(model_to_save.state_dict(), output_model_file)
-    #                     else:
-    #                         print("=" * 80)
-    #                         print("Best Spearman score", best_spearmanr)
-
-    #             if args.freeze_bert:
-    #                 pretrained_model.eval()
-    #             else:
-    #                 pretrained_model.train()
-
-    # if args.do_test:
-    #     pretrained_model.eval()
-    #     print('test...')
-    #     for file in [args.year + '.test.tsv']:
-
-    #         eval_examples = read_examples_dict[args.preprocess_type](os.path.join(args.data_dir, file),
-    #                                                                     is_training=True)
-    #         eval_features = convert_examples_to_features_dict[args.preprocess_type](
-    #             eval_examples, tokenizer, args.max_seq_length, args.mode, logger, is_training=True, label_type='regression')
-    #         logger.info("***** Running evaluation *****")
-    #         logger.info("  Num examples = %d", len(eval_examples))
-    #         logger.info("  Batch size = %d", args.eval_batch_size)
-
-    #         all_input_ids = torch.tensor([f.input_ids for f in eval_features], dtype=torch.long)
-    #         all_input_mask = torch.tensor([f.input_mask for f in eval_features], dtype=torch.long)
-    #         all_segment_ids = torch.tensor([f.segment_ids for f in eval_features], dtype=torch.long)
-    #         all_label = torch.tensor([f.label for f in eval_features], dtype=torch.float32)
-    #         eval_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label)
-    #         # Run prediction for full data
-    #         eval_sampler = SequentialSampler(eval_data)
-    #         eval_dataloader = DataLoader(eval_data, sampler=eval_sampler, batch_size=args.eval_batch_size)
-
-    #         pretrained_model.eval()
-    #         eval_loss = 0
-    #         nb_eval_steps, nb_eval_examples = 0, 0
-
-    #         for input_ids, input_mask, segment_ids, label_ids in eval_dataloader:
-    #             input_ids = input_ids.to(device)
-    #             input_mask = input_mask.to(device)
-    #             segment_ids = segment_ids.to(device)
-    #             label_ids = label_ids.to(device)
-
-    #             with torch.no_grad():
-    #                 pretrained_model_outputs = pretrained_model(input_ids=input_ids, token_type_ids=segment_ids,
-    #                                     attention_mask=input_mask, labels=label_ids)
-
-    #             logits = logits.detach().cpu().numpy()
-    #             label_ids = label_ids.to('cpu').numpy()
-    #             eval_loss += tmp_eval_loss.item()
+                with torch.no_grad():
+                    loss, logits = pretrained_model(input_ids=input_ids, token_type_ids=segment_ids,
+                                        attention_mask=input_mask, labels=label_ids)
+                logits = logits.detach().cpu().numpy()
+                label_ids = label_ids.to('cpu').numpy()
+                eval_loss += tmp_eval_loss.item()
                 
-    #             nb_eval_steps += 1
-    #             nb_eval_examples += input_ids.size(0)
-    #             if nb_eval_steps == 1:
-    #                 inference = logits.copy()
-    #                 gold = label_ids.copy()
-    #             else:
-    #                 inference = np.concatenate((inference, logits), axis=0)
-    #                 gold = np.concatenate((gold, label_ids), axis=0)
+                nb_eval_steps += 1
+                nb_eval_examples += input_ids.size(0)
+                if nb_eval_steps == 1:
+                    inference = logits.copy()
+                    gold = label_ids.copy()
+                else:
+                    inference = np.concatenate((inference, logits), axis=0)
+                    gold = np.concatenate((gold, label_ids), axis=0)
 
-    #         eval_loss = eval_loss / nb_eval_steps
-    #         if args.local_rank in [-1, 0]:
-    #             eval_spearmanr = spearmanr(np.squeeze(inference), gold)[0]
-    #             eval_pearsonr = pearsonr(np.squeeze(inference), gold)[0]
+            eval_loss = eval_loss / nb_eval_steps
+            if args.local_rank in [-1, 0]:
+                eval_spearmanr = spearmanr(np.squeeze(inference), gold)[0]
+                eval_pearsonr = pearsonr(np.squeeze(inference), gold)[0]
                         
-    #             result = {'eval_loss': eval_loss,
-    #                     'eval_spearmanr': eval_spearmanr,
-    #                     'eval_pearsonr': eval_pearsonr}
+                result = {'eval_loss': eval_loss,
+                        'eval_spearmanr': eval_spearmanr,
+                        'eval_pearsonr': eval_pearsonr}
                 
-    #             logger.info(result)
+                logger.info(result)
 
 if __name__ == "__main__":
     main()

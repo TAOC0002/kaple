@@ -1,10 +1,11 @@
 batch=8
 accu=8
 lr=5e-6
-GPU=''
+GPU='0'
 CUDA_VISIBLE_DEVICES=$GPU python ../examples/adaptformer/main.py \
 --model_name_or_path roberta-large \
---data_dir ../data/sts/stsbenchmark \
+--data_dir ../data/sts/sts12-16/all \
+--year '2016' \
 --output_dir ../proc_data/roberta_sts \
 --max_seq_length 512 \
 --eval_steps 60 \
@@ -13,8 +14,9 @@ CUDA_VISIBLE_DEVICES=$GPU python ../examples/adaptformer/main.py \
 --gradient_accumulation_steps $accu \
 --per_gpu_eval_batch_size $batch \
 --learning_rate $lr \
---comment july5 \
+--comment july8 \
 --overwrite_output_dir \
 --do_train \
 --do_eval \
---no_cuda
+--freeze_adapter \
+--meta_adaptermodel "../proc_data/roberta_sts/july5/pytorch_bertmodel_best.bin"

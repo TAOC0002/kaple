@@ -17,13 +17,13 @@ from torch.nn import Sigmoid, MSELoss
 class AdaptFormer(nn.Module):
     """ Vision Transformer with support for global average pooling
     """
-    def __init__(self, args, score_range=5, num_classes=1, embed_dim=1024):
+    def __init__(self, args, config, score_range=5, num_classes=1, embed_dim=1024):
         super(AdaptFormer, self).__init__()
         self.args = args
+        self.config = config
         self.num_classes = num_classes
         self.num_features = self.embed_dim = embed_dim  # num_features for consistency with other models
         self.score_range = score_range
-        self.config = RobertaConfig(hidden_size=1024, num_hidden_layers=24, num_attention_heads=16)
 
         self.classifier = nn.Linear(self.num_features, num_classes)
         self.embeddings = RobertaEmbeddings(self.config)
@@ -33,14 +33,14 @@ class AdaptFormer(nn.Module):
             for param in self.classifier.parameters() or param in self.embeddings.parameters():
                 param.requires_grad = False
             for i in range(self.config.num_hidden_layers):
-                for elements in self.blocks[i]:
+                for elements in self.blocks[i].parameters():
                     elements.requires_grad = False
-                for adapter_elements in self.blocks[i].adaptmlp:
+                for adapter_elements in self.blocks[i].adaptmlp.parameters():
                     adapter_elements.requires_grad = True
 
         if self.args.freeze_adapter:
             for i in range(self.config.num_hidden_layers):
-                for adapter_elements in self.blocks[i].adaptmlp:
+                for adapter_elements in self.blocks[i].adaptmlp.parameters():
                     adapter_elements.requires_grad = False
 
     def forward_features(self, input_ids, attention_mask=None, token_type_ids=None, position_ids=None, head_mask=None):
@@ -48,11 +48,10 @@ class AdaptFormer(nn.Module):
             attention_mask = torch.ones_like(input_ids)
         if token_type_ids is None:
             token_type_ids = torch.zeros_like(input_ids)
-        head_mask = [None] * self.config.num_hidden_layers
         hidden_states = self.embeddings(input_ids, position_ids=position_ids, token_type_ids=token_type_ids)
 
         for i, block in enumerate(self.blocks):
-            layer_outputs = block(hidden_states=hidden_states, attention_mask=attention_mask, head_mask=head_mask[i])
+            layer_outputs = block(hidden_states=hidden_states, attention_mask=attention_mask)
             hidden_states = layer_outputs
 
         encoder_outputs = (hidden_states,)
@@ -62,9 +61,9 @@ class AdaptFormer(nn.Module):
     def forward(self, input_ids, attention_mask=None, token_type_ids=None, position_ids=None, head_mask=None, labels=None):
         sigmoid = Sigmoid()
         loss_fct = MSELoss()
-        logits = self.forward_features(input_ids, attention_mask=None, token_type_ids=None, position_ids=None, head_mask=None)
+        logits = self.forward_features(input_ids=input_ids, attention_mask=attention_mask, token_type_ids=token_type_ids, position_ids=position_ids, head_mask=head_mask)
         logits = self.classifier(logits[:, 0, :].squeeze(dim=1))
-        reshaped_logits = logits.view(-1, self.num_labels).squeeze(dim=1)
+        reshaped_logits = logits.view(-1, self.num_classes)
         outputs = reshaped_logits.squeeze(dim=1)
         outputs = self.score_range * sigmoid(outputs)
         loss = loss_fct(outputs, labels) 

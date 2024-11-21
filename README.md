@@ -1,4 +1,4 @@
-# KAPLE: a Knowledgeable Aadapter-based model for Pre-trained Language Embedding
+# KAPLE: a Knowledgeable Aadapter-Based Model for Pre-trained Language Embedding
 This repository contains the codes and data of a final year project titled "Enhance graph-based document retrieval with external knowledge". The research was conducted in the School of Electrical and Electronic Engineering at Nanyang Technological University under the supervision of [A/P Chen Li-Hui](https://dr.ntu.edu.sg/cris/rp/rp00969).
 
 In this study, we start from a recent paper "K-Adapter: Infusing Knowledge into Pre-Trained Models with Adapters", that supports continual knowledge infusion into language models. Novel adjustments such as joint optimization, contrastive learning and knowledge distillation are combined to further improve the model's performance on sentence-pair modeling tasks (e.g. NLI). We extend our work to patent document retrieval, and show that our new adaptation of K-Adapter work well on retrieval tasks.
